@@ -1,0 +1,35 @@
+{
+  "name": "telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram live audit bot for Solana reward system",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "verify": "ts-node verify-notifications.ts"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "solana",
+    "audit"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.67.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/node-telegram-bot-api": "^0.64.13",
+    "@types/xlsx": "^0.0.36",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.2"
+  }
+}

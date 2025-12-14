@@ -1,0 +1,10 @@
+node_modules/
+dist/
+logs/
+data/
+.env
+*.log
+bot.log
+notification-state.json
+.DS_Store
+

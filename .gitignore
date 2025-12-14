@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*/dist/
+
+# Token information (contains sensitive keys)
+token-info.json
+*.keypair.json
+admin.json
+mint-authority.json
+tax-wallet.json
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*
+!.env.example
+!.env.*.example
+
+# State and data files
+reward-state.json
+reward-history.json
+*state.json
+data/
+*/data/
+logs/
+*/logs/
+exports/
+*/exports/
+
+# Logs
+*.log
+npm-debug.log*
+bot.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+

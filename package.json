@@ -1,0 +1,33 @@
+{
+  "name": "reward-project",
+  "version": "1.0.0",
+  "description": "Reward Project - Token creation and management",
+  "type": "module",
+  "main": "create-token.js",
+  "scripts": {
+    "create-token": "node create-token.js",
+    "create-token-with-fee": "node create-token-with-transfer-fee.js",
+    "mint-tokens": "node mint-tokens.js",
+    "create-tax-token": "tsx createTaxToken.ts",
+    "update-transfer-fee": "tsx updateTransferFee.ts"
+  },
+  "dependencies": {
+    "@metaplex-foundation/mpl-token-metadata": "^3.2.1",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.27",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "solana",
+    "token",
+    "token2022",
+    "reward",
+    "spl-token"
+  ],
+  "author": "",
+  "license": "MIT"
+}

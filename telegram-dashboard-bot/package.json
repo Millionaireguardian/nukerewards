@@ -1,0 +1,21 @@
+{
+  "name": "telegram-dashboard-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@types/node": "^25.0.2",
+    "axios": "^1.13.2",
+    "dotenv": "^17.2.3",
+    "exceljs": "^4.4.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

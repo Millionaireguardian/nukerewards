@@ -1,0 +1,287 @@
+import { Router, Request, Response } from 'express';
+import {
+  getAllHoldersWithStatus,
+  getEligibleHolders,
+  getPendingPayouts,
+  getLastReward,
+} from '../services/rewardService';
+import { getSchedulerStatus } from '../scheduler/rewardScheduler';
+import { getTokenHolders } from '../services/solanaService';
+import { getNUKEPriceUSD } from '../services/priceService';
+import { isBlacklisted } from '../config/blacklist';
+import { REWARD_CONFIG } from '../config/constants';
+import { logger } from '../utils/logger';
+
+const router = Router();
+
+/**
+ * GET /dashboard/holders
+ * Returns list of all holders with eligibility status and reward info
+ * Query params:
+ *   - eligibleOnly: boolean (default: false)
+ *   - limit: number (default: 1000, max: 1000)
+ *   - offset: number (default: 0) - for pagination
+ */
+router.get('/holders', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const startTime = Date.now();
+    const eligibleOnly = req.query.eligibleOnly === 'true';
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 1000, 1000);
+    const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
+
+    logger.info('Dashboard API: GET /dashboard/holders', {
+      eligibleOnly,
+      limit,
+      offset,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Get all holders with status
+    let holders = await getAllHoldersWithStatus();
+
+    // Filter by eligibility if requested
+    if (eligibleOnly) {
+      holders = holders.filter(h => h.eligibilityStatus === 'eligible');
+    }
+
+    // Sort by USD value (descending)
+    holders.sort((a, b) => b.usdValue - a.usdValue);
+
+    // Paginate
+    const total = holders.length;
+    const paginatedHolders = holders.slice(offset, offset + limit);
+
+    // Format response
+    const response = {
+      total,
+      limit,
+      offset,
+      hasMore: offset + limit < total,
+      holders: paginatedHolders.map(h => ({
+        pubkey: h.pubkey,
+        balance: h.balance,
+        usdValue: parseFloat(h.usdValue.toFixed(2)),
+        eligibilityStatus: h.eligibilityStatus,
+        lastReward: h.lastReward ? new Date(h.lastReward).toISOString() : null,
+        retryCount: h.retryCount,
+      })),
+    };
+
+    const duration = Date.now() - startTime;
+    logger.info('Dashboard API: GET /dashboard/holders completed', {
+      duration: `${duration}ms`,
+      total,
+      returned: paginatedHolders.length,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Error fetching holders for dashboard', {
+      error: error instanceof Error ? error.message : String(error),
+      query: req.query,
+    });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+      holders: [],
+      total: 0,
+    });
+  }
+});
+
+/**
+ * GET /dashboard/rewards
+ * Returns last reward cycle summary
+ * Query params:
+ *   - pubkey: string (optional) - filter by specific holder
+ */
+router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const startTime = Date.now();
+    const filterPubkey = req.query.pubkey as string | undefined;
+
+    logger.info('Dashboard API: GET /dashboard/rewards', {
+      filterPubkey,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Get scheduler status
+    const schedulerStatus = getSchedulerStatus();
+
+    // Get all holders and eligible holders
+    const allHolders = await getTokenHolders();
+    const eligibleHolders = await getEligibleHolders().catch(() => []);
+    const tokenPriceUSD = await getNUKEPriceUSD().catch(() => 0.01);
+
+    // Get pending payouts
+    const pendingPayouts = getPendingPayouts();
+    const totalSOLDistributed = pendingPayouts
+      .filter(p => !filterPubkey || p.pubkey === filterPubkey)
+      .reduce((sum, p) => sum + p.rewardSOL, 0);
+
+    // Calculate statistics
+    const blacklistedCount = allHolders.filter(h => isBlacklisted(h.owner)).length;
+    const excludedCount = allHolders.length - eligibleHolders.length - blacklistedCount;
+
+    // Filter by pubkey if provided
+    let filteredEligible = eligibleHolders;
+    let filteredPending = pendingPayouts;
+    if (filterPubkey) {
+      filteredEligible = eligibleHolders.filter(h => h.pubkey === filterPubkey);
+      filteredPending = pendingPayouts.filter(p => p.pubkey === filterPubkey);
+    }
+
+    const response = {
+      lastRun: schedulerStatus.lastRun ? new Date(schedulerStatus.lastRun).toISOString() : null,
+      nextRun: schedulerStatus.nextRun ? new Date(schedulerStatus.nextRun).toISOString() : null,
+      isRunning: schedulerStatus.isRunning,
+      statistics: {
+        totalHolders: allHolders.length,
+        eligibleHolders: eligibleHolders.length,
+        excludedHolders: excludedCount,
+        blacklistedHolders: blacklistedCount,
+        pendingPayouts: pendingPayouts.length,
+        totalSOLDistributed: parseFloat(totalSOLDistributed.toFixed(6)),
+      },
+      tokenPrice: {
+        usd: parseFloat(tokenPriceUSD.toFixed(6)),
+      },
+      filtered: filterPubkey ? {
+        pubkey: filterPubkey,
+        eligible: filteredEligible.length > 0,
+        pendingPayouts: filteredPending.length,
+        totalSOLForHolder: parseFloat(
+          filteredPending.reduce((sum, p) => sum + p.rewardSOL, 0).toFixed(6)
+        ),
+      } : null,
+    };
+
+    const duration = Date.now() - startTime;
+    logger.info('Dashboard API: GET /dashboard/rewards completed', {
+      duration: `${duration}ms`,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Error fetching rewards summary for dashboard', {
+      error: error instanceof Error ? error.message : String(error),
+      query: req.query,
+    });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+      lastRun: null,
+      nextRun: null,
+      statistics: {
+        totalHolders: 0,
+        eligibleHolders: 0,
+        excludedHolders: 0,
+        blacklistedHolders: 0,
+        pendingPayouts: 0,
+        totalSOLDistributed: 0,
+      },
+    });
+  }
+});
+
+/**
+ * GET /dashboard/payouts
+ * Returns list of pending payouts with status
+ * Query params:
+ *   - pubkey: string (optional) - filter by specific holder
+ *   - status: 'pending' | 'failed' (optional)
+ *   - limit: number (default: 100, max: 500)
+ */
+router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const startTime = Date.now();
+    const filterPubkey = req.query.pubkey as string | undefined;
+    const filterStatus = req.query.status as 'pending' | 'failed' | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 500);
+
+    logger.info('Dashboard API: GET /dashboard/payouts', {
+      filterPubkey,
+      filterStatus,
+      limit,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Get pending payouts
+    let payouts = getPendingPayouts();
+
+    // Enrich payouts with status
+    // Note: Items in pendingPayouts are either pending or failed
+    // Successful payouts are removed from pendingPayouts after execution
+    const enrichedPayouts = payouts.map(payout => {
+      const lastReward = getLastReward(payout.pubkey);
+      const retryCount = payout.retryCount;
+      
+      // Determine status:
+      // - failed: retryCount >= MAX_RETRIES (max retries exceeded)
+      // - pending: retryCount < MAX_RETRIES (still being retried)
+      let status: 'pending' | 'success' | 'failed';
+      if (retryCount >= REWARD_CONFIG.MAX_RETRIES) {
+        status = 'failed';
+      } else {
+        status = 'pending';
+      }
+
+      return {
+        pubkey: payout.pubkey,
+        rewardSOL: parseFloat(payout.rewardSOL.toFixed(6)),
+        queuedAt: new Date(payout.queuedAt).toISOString(),
+        retryCount: payout.retryCount,
+        status,
+        lastReward: lastReward ? new Date(lastReward).toISOString() : null,
+      };
+    });
+
+    // Apply filters
+    let filteredPayouts = enrichedPayouts;
+    if (filterPubkey) {
+      filteredPayouts = filteredPayouts.filter(p => p.pubkey === filterPubkey);
+    }
+    if (filterStatus) {
+      filteredPayouts = filteredPayouts.filter(p => p.status === filterStatus);
+    }
+
+    // Sort by queuedAt (newest first)
+    filteredPayouts.sort((a, b) => new Date(b.queuedAt).getTime() - new Date(a.queuedAt).getTime());
+
+    // Apply limit
+    const limitedPayouts = filteredPayouts.slice(0, limit);
+
+    const response = {
+      total: filteredPayouts.length,
+      limit,
+      payouts: limitedPayouts,
+      summary: {
+        pending: filteredPayouts.filter(p => p.status === 'pending').length,
+        failed: filteredPayouts.filter(p => p.status === 'failed').length,
+        totalSOL: parseFloat(
+          filteredPayouts.reduce((sum, p) => sum + p.rewardSOL, 0).toFixed(6)
+        ),
+      },
+    };
+
+    const duration = Date.now() - startTime;
+    logger.info('Dashboard API: GET /dashboard/payouts completed', {
+      duration: `${duration}ms`,
+      total: filteredPayouts.length,
+      returned: limitedPayouts.length,
+    });
+
+    res.status(200).json(response);
+  } catch (error) {
+    logger.error('Error fetching payouts for dashboard', {
+      error: error instanceof Error ? error.message : String(error),
+      query: req.query,
+    });
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Unknown error',
+      payouts: [],
+      total: 0,
+    });
+  }
+});
+
+export default router;
+

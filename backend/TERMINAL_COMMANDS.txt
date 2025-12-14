@@ -1,0 +1,36 @@
+# ============================================
+# BACKEND SETUP - COPY-PASTE READY COMMANDS
+# ============================================
+
+# 1. Navigate to backend folder
+cd backend
+
+# 2. Install production dependencies
+npm install express dotenv
+
+# 3. Install dev dependencies
+npm install --save-dev typescript ts-node-dev @types/node @types/express
+
+# 4. Initialize TypeScript
+npx tsc --init
+
+# 5. Create .env file from template
+cp .env.example .env
+
+# 6. Run development server
+npm run dev
+
+# ============================================
+# TESTING
+# ============================================
+
+# Test health endpoint (in new terminal)
+curl http://localhost:3000/health
+
+# Production build & start
+npm run build && npm start
+
+# ============================================
+# ONE-LINE SETUP (Alternative)
+# ============================================
+cd backend && npm install express dotenv && npm install --save-dev typescript ts-node-dev @types/node @types/express && npx tsc --init && cp .env.example .env && echo "✅ Setup complete! Edit .env then run: npm run dev"
