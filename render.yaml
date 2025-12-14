@@ -35,8 +35,9 @@ services:
     env: node
     region: oregon
     plan: free
-    buildCommand: cd telegram-bot && npm install && npm run build
-    startCommand: cd telegram-bot && npm start
+    rootDir: telegram-bot
+    buildCommand: npm install && npm run build
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
