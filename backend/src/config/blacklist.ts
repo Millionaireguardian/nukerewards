@@ -18,6 +18,6 @@ export const BLACKLISTED_ADDRESSES = [
  * Check if an address is blacklisted
  */
 export function isBlacklisted(address: string): boolean {
-  return BLACKLISTED_ADDRESSES.includes(address as any);
+  return (BLACKLISTED_ADDRESSES as readonly string[]).includes(address);
 }
 

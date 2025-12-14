@@ -11,8 +11,9 @@ async function main(): Promise<void> {
   try {
     const app = createApp();
     startServer(app);
-  } catch (error) {
-    console.error('Failed to start application:', error);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Failed to start application:', errorMessage);
     process.exit(1);
   }
 }

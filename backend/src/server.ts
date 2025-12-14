@@ -21,7 +21,7 @@ export function createApp(): Express {
   ].filter(Boolean); // Remove undefined values
 
   app.use(cors({
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       // Allow requests with no origin (like mobile apps, Postman, curl)
       if (!origin) return callback(null, true);
       
@@ -39,7 +39,7 @@ export function createApp(): Express {
   }));
 
   // Request logging middleware (for debugging)
-  app.use((req: Request, _res: Response, next) => {
+  app.use((req: Request, _res: Response, next: express.NextFunction) => {
     if (process.env.NODE_ENV === 'development') {
       console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, {
         origin: req.headers.origin,
