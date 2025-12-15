@@ -20,19 +20,9 @@ import * as fs from 'fs';
 import { CONFIG } from './config.js';
 
 async function createToken() {
-  const {
-    createCreateMetadataAccountV3Instruction,
-    createCreateMetadataAccountV2Instruction,
-    createCreateMetadataAccountInstruction,
-  } = mplTokenMetadata?.default ?? mplTokenMetadata;
-
-  const createMetadataInstruction =
-    createCreateMetadataAccountV3Instruction ||
-    createCreateMetadataAccountV2Instruction ||
-    createCreateMetadataAccountInstruction;
-
-  if (!createMetadataInstruction) {
-    throw new Error('Cannot find a metadata creation instruction (v3/v2/legacy) in mpl-token-metadata');
+  const { createCreateMetadataAccountV3Instruction } = mplTokenMetadata;
+  if (!createCreateMetadataAccountV3Instruction) {
+    throw new Error('createCreateMetadataAccountV3Instruction is not available in mpl-token-metadata');
   }
 
   // Connection
@@ -113,9 +103,6 @@ async function createToken() {
       ? CONFIG.metadata.creators
       : [{ address: adminWallet.publicKey, verified: true, share: 100 }];
 
-  const isV3 = createMetadataInstruction === createCreateMetadataAccountV3Instruction;
-  const isV2 = createMetadataInstruction === createCreateMetadataAccountV2Instruction;
-
   const data = {
     name: CONFIG.metadata.name,
     symbol: CONFIG.metadata.symbol,
@@ -126,54 +113,22 @@ async function createToken() {
     uses: null,
   };
 
-  const metadataIx = isV3
-    ? createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        {
-          createMetadataAccountArgsV3: {
-            data,
-            isMutable: true,
-            collectionDetails: null,
-          },
-        }
-      )
-    : isV2
-    ? createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        {
-          createMetadataAccountArgsV2: {
-            data,
-            isMutable: true,
-          },
-        }
-      )
-    : createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        {
-          createMetadataAccountArgs: {
-            data,
-            isMutable: true,
-          },
-        }
-      );
+  const metadataIx = createCreateMetadataAccountV3Instruction(
+    {
+      metadata: metadataPDA,
+      mint,
+      mintAuthority: mintAuthority.publicKey,
+      payer: adminWallet.publicKey,
+      updateAuthority: adminWallet.publicKey,
+    },
+    {
+      createMetadataAccountArgsV3: {
+        data,
+        isMutable: true,
+        collectionDetails: null,
+      },
+    }
+  );
 
   transaction.add(metadataIx);
   console.log('✅ Metadata instruction added');
