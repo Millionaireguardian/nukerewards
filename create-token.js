@@ -17,6 +17,7 @@ import {
 } from '@solana/spl-token';
 import mplTokenMetadata from '@metaplex-foundation/mpl-token-metadata';
 const { createCreateMetadataAccountV3Instruction } = mplTokenMetadata;
+import * as fs from 'fs';
 import { CONFIG } from './config.js';
 
 // Get connection based on config
@@ -123,14 +124,22 @@ async function createToken() {
 
     // Step 4: Add metadata
     console.log('📝 Step 4: Adding token metadata...');
-    const metadataPDA = PublicKey.findProgramAddressSync(
-      [
-        Buffer.from('metadata'),
-        new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s').toBuffer(),
-        mint.toBuffer(),
-      ],
-      new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s')
-    )[0];
+    const METAPLEX_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+    const [metadataPDA] = PublicKey.findProgramAddressSync(
+      [Buffer.from('metadata'), METAPLEX_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+      METAPLEX_PROGRAM_ID
+    );
+
+    const creators =
+      CONFIG.metadata.creators && CONFIG.metadata.creators.length > 0
+        ? CONFIG.metadata.creators
+        : [
+            {
+              address: adminWallet.publicKey,
+              verified: true,
+              share: 100,
+            },
+          ];
 
     const metadataInstruction = createCreateMetadataAccountV3Instruction(
       {
@@ -145,9 +154,9 @@ async function createToken() {
           data: {
             name: CONFIG.metadata.name,
             symbol: CONFIG.metadata.symbol,
-            uri: CONFIG.metadata.image || '',
+            uri: CONFIG.metadata.uri || CONFIG.metadata.image || '',
             sellerFeeBasisPoints: CONFIG.metadata.sellerFeeBasisPoints,
-            creators: CONFIG.metadata.creators,
+            creators,
             collection: null,
             uses: null,
           },
