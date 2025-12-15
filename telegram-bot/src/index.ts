@@ -32,22 +32,44 @@ function parseAuthorizedChatIds(raw: string): string[] {
     .filter((id) => id.length > 0);
 }
 
-function isAuthorizedChat(allowedIds: string[], msgChatId: number, msgUsername?: string): boolean {
+function isAuthorizedChat(allowedIds: string[], chatId?: number, username?: string): boolean {
   if (!allowedIds.length) return true;
-
-  const idAsString = String(msgChatId);
-  if (allowedIds.includes(idAsString)) {
-    return true;
+  if (chatId !== undefined) {
+    const idAsString = String(chatId);
+    if (allowedIds.includes(idAsString)) {
+      return true;
+    }
   }
-
-  if (msgUsername) {
-    const handle = msgUsername.startsWith('@') ? msgUsername : `@${msgUsername}`;
+  if (username) {
+    const handle = username.startsWith('@') ? username : `@${username}`;
     if (allowedIds.includes(handle)) {
       return true;
     }
   }
-
   return false;
+}
+
+function isAuthorizedMessage(allowedIds: string[], msg: TelegramBot.Message): boolean {
+  const chatId = msg.chat?.id;
+  // username for private/group/supergroup; for channels it's on chat.username
+  const chatUsername = (msg.chat as any)?.username ?? msg.chat?.username ?? msg.chat?.['username'];
+  const fwdChatId = msg.forward_from_chat?.id;
+  const fwdUsername = msg.forward_from_chat?.username;
+
+  const directAllowed = isAuthorizedChat(allowedIds, chatId, chatUsername);
+  const forwardAllowed = isAuthorizedChat(allowedIds, fwdChatId, fwdUsername);
+
+  console.log('[Auth] check', {
+    allowedIds,
+    chatId,
+    chatUsername,
+    forwardChatId: fwdChatId,
+    forwardUsername: fwdUsername,
+    directAllowed,
+    forwardAllowed,
+  });
+
+  return directAllowed || forwardAllowed;
 }
 
 async function handleRewardsCommand(bot: TelegramBot, chatId: number, backendUrl: string): Promise<void> {
@@ -160,13 +182,13 @@ function main(): void {
       });
     });
 
-    // /start: only for private chats, and only for authorized IDs
+    // /start: only for private chats, and only for authorized IDs (including forwarded from authorized chats)
     bot.onText(/\/start/, async (msg) => {
       if (msg.chat.type !== 'private') {
         // ignore /start in channels or groups
         return;
       }
-      const allowed = isAuthorizedChat(authorizedChatIds, msg.chat.id, msg.chat.username || undefined);
+      const allowed = isAuthorizedMessage(authorizedChatIds, msg);
       if (!allowed) {
         await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
         return;
@@ -179,11 +201,7 @@ function main(): void {
 
     // /rewards: allowed for authorized private chats and the configured channel
     bot.onText(/\/rewards/, async (msg) => {
-      const isChannel = msg.chat.type === 'channel';
-      const allowed = isChannel
-        ? isAuthorizedChat(authorizedChatIds, msg.chat.id, (msg.chat as any).username)
-        : isAuthorizedChat(authorizedChatIds, msg.chat.id, msg.chat.username || undefined);
-
+      const allowed = isAuthorizedMessage(authorizedChatIds, msg);
       if (!allowed) {
         await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
         return;
