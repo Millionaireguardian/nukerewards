@@ -21,12 +21,16 @@ import { CONFIG } from './config.js';
 async function createToken() {
   // Dynamic import of Metaplex module
   const mplTokenMetadata = await import('@metaplex-foundation/mpl-token-metadata');
-  const createCreateMetadataAccountV3Instruction =
+  const createMetadataInstruction =
     mplTokenMetadata.createCreateMetadataAccountV3Instruction ||
-    mplTokenMetadata.default?.createCreateMetadataAccountV3Instruction;
+    mplTokenMetadata.default?.createCreateMetadataAccountV3Instruction ||
+    mplTokenMetadata.createCreateMetadataAccountV2Instruction ||
+    mplTokenMetadata.default?.createCreateMetadataAccountV2Instruction ||
+    mplTokenMetadata.createCreateMetadataAccountInstruction ||
+    mplTokenMetadata.default?.createCreateMetadataAccountInstruction;
 
-  if (!createCreateMetadataAccountV3Instruction) {
-    throw new Error('Cannot find createCreateMetadataAccountV3Instruction in mpl-token-metadata');
+  if (!createMetadataInstruction) {
+    throw new Error('Cannot find a metadata creation instruction in mpl-token-metadata (v3/v2/legacy)');
   }
 
   // Connection
@@ -107,7 +111,7 @@ async function createToken() {
       ? CONFIG.metadata.creators
       : [{ address: adminWallet.publicKey, verified: true, share: 100 }];
 
-  const metadataIx = createCreateMetadataAccountV3Instruction(
+  const metadataIx = createMetadataInstruction(
     {
       metadata: metadataPDA,
       mint,
