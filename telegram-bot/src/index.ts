@@ -25,11 +25,28 @@ function getWebhookUrl(): string {
   return normalized.replace(/\/+$/, '');
 }
 
-function isAuthorizedChat(chatIdEnv: string, msgChatId: number, msgUsername?: string): boolean {
-  if (!chatIdEnv) return true;
-  const normalizedEnv = chatIdEnv.trim();
-  if (normalizedEnv === String(msgChatId)) return true;
-  if (msgUsername && normalizedEnv === `@${msgUsername}`) return true;
+function parseAuthorizedChatIds(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
+function isAuthorizedChat(allowedIds: string[], msgChatId: number, msgUsername?: string): boolean {
+  if (!allowedIds.length) return true;
+
+  const idAsString = String(msgChatId);
+  if (allowedIds.includes(idAsString)) {
+    return true;
+  }
+
+  if (msgUsername) {
+    const handle = msgUsername.startsWith('@') ? msgUsername : `@${msgUsername}`;
+    if (allowedIds.includes(handle)) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -72,7 +89,13 @@ async function handleRewardsCommand(bot: TelegramBot, chatId: number, backendUrl
 function main(): void {
   try {
     const token = requireEnv('TELEGRAM_BOT_TOKEN');
-    const notificationChatId = requireEnv('TELEGRAM_CHAT_ID');
+    // Support multiple chat IDs: TELEGRAM_CHAT_IDS=chat1,chat2,...
+    // Fallback to legacy TELEGRAM_CHAT_ID if present.
+    const chatIdsEnv = process.env.TELEGRAM_CHAT_IDS || process.env.TELEGRAM_CHAT_ID;
+    if (!chatIdsEnv || !chatIdsEnv.trim()) {
+      throw new Error('TELEGRAM_CHAT_IDS (or TELEGRAM_CHAT_ID) environment variable is required');
+    }
+    const authorizedChatIds = parseAuthorizedChatIds(chatIdsEnv);
     const backendUrl = requireEnv('BACKEND_URL');
     const nodeEnv = process.env.NODE_ENV || 'production';
     const port = Number(process.env.PORT || 3000);
@@ -137,10 +160,15 @@ function main(): void {
       });
     });
 
-    // /start: only for private chats
+    // /start: only for private chats, and only for authorized IDs
     bot.onText(/\/start/, async (msg) => {
       if (msg.chat.type !== 'private') {
         // ignore /start in channels or groups
+        return;
+      }
+      const allowed = isAuthorizedChat(authorizedChatIds, msg.chat.id, msg.chat.username || undefined);
+      if (!allowed) {
+        await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
         return;
       }
       await bot.sendMessage(
@@ -153,8 +181,8 @@ function main(): void {
     bot.onText(/\/rewards/, async (msg) => {
       const isChannel = msg.chat.type === 'channel';
       const allowed = isChannel
-        ? isAuthorizedChat(notificationChatId, msg.chat.id, (msg.chat as any).username)
-        : isAuthorizedChat(notificationChatId, msg.chat.id, msg.chat.username || undefined);
+        ? isAuthorizedChat(authorizedChatIds, msg.chat.id, (msg.chat as any).username)
+        : isAuthorizedChat(authorizedChatIds, msg.chat.id, msg.chat.username || undefined);
 
       if (!allowed) {
         await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
