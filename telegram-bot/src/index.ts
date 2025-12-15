@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import express, { Request, Response } from 'express';
 
 dotenv.config();
 
@@ -12,13 +13,16 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function parsePollingInterval(): number {
-  const raw = process.env.POLLING_INTERVAL_MS || '60000';
-  const value = Number.parseInt(raw, 10);
-  if (Number.isNaN(value) || value <= 0) {
-    throw new Error('POLLING_INTERVAL_MS must be a positive integer');
+function getWebhookUrl(): string {
+  const explicit = process.env.TELEGRAM_WEBHOOK_URL;
+  if (explicit) return explicit.replace(/\/+$/, '');
+
+  const railwayUrl = process.env.RAILWAY_STATIC_URL || process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (!railwayUrl) {
+    throw new Error('TELEGRAM_WEBHOOK_URL or RAILWAY_STATIC_URL/RAILWAY_PUBLIC_DOMAIN must be set for webhooks');
   }
-  return value;
+  const normalized = railwayUrl.startsWith('http') ? railwayUrl : `https://${railwayUrl}`;
+  return normalized.replace(/\/+$/, '');
 }
 
 function isAuthorizedChat(chatIdEnv: string, msgChatId: number, msgUsername?: string): boolean {
@@ -70,33 +74,95 @@ function main(): void {
     const token = requireEnv('TELEGRAM_BOT_TOKEN');
     const notificationChatId = requireEnv('TELEGRAM_CHAT_ID');
     const backendUrl = requireEnv('BACKEND_URL');
-    const pollingInterval = parsePollingInterval();
     const nodeEnv = process.env.NODE_ENV || 'production';
+    const port = Number(process.env.PORT || 3000);
+    const webhookBase = getWebhookUrl();
+    const webhookPath = '/telegram/webhook';
+    const webhookUrl = `${webhookBase}${webhookPath}`;
 
     const bot = new TelegramBot(token, {
-      polling: { interval: pollingInterval },
+      polling: false,
+      webHook: {
+        port: 0, // disable internal HTTP server; we'll use Express
+      },
     });
 
-    console.log('[Bot] Telegram bot is running...', {
-      env: nodeEnv,
-      pollingInterval,
-      backendUrl,
+    console.log('[Bot] Setting Telegram webhook to:', webhookUrl);
+    bot
+      .setWebHook(webhookUrl)
+      .then(() => {
+        console.log('[Bot] Webhook registered successfully');
+      })
+      .catch((err) => {
+        console.error('[Bot] Failed to set webhook:', err);
+        process.exit(1);
+      });
+
+    const app = express();
+    app.use(express.json());
+
+    app.get('/health', (_req: Request, res: Response) => {
+      res.status(200).send('OK');
     });
 
+    app.post(webhookPath, (req: Request, res: Response) => {
+      console.log('[Bot] Incoming update:', JSON.stringify(req.body));
+      bot.processUpdate(req.body);
+      res.sendStatus(200);
+    });
+
+    bot.on('message', async (msg) => {
+      console.log('[Bot] message update', {
+        chatId: msg.chat.id,
+        chatType: msg.chat.type,
+        from: msg.from?.username,
+        text: msg.text,
+      });
+    });
+
+    bot.on('channel_post', async (msg) => {
+      console.log('[Bot] channel_post update', {
+        chatId: msg.chat.id,
+        chatTitle: msg.chat.title,
+        chatUsername: (msg.chat as any).username,
+        text: msg.text,
+      });
+    });
+
+    // /start: only for private chats
     bot.onText(/\/start/, async (msg) => {
-      if (!isAuthorizedChat(notificationChatId, msg.chat.id, msg.chat.username || undefined)) {
-        await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
+      if (msg.chat.type !== 'private') {
+        // ignore /start in channels or groups
         return;
       }
-      await bot.sendMessage(msg.chat.id, 'Hello! Bot is online and ready. Use /rewards to view the latest rewards summary.');
+      await bot.sendMessage(
+        msg.chat.id,
+        'Hello! Bot is online and ready. Use /rewards to view the latest rewards summary in the configured channel.'
+      );
     });
 
+    // /rewards: allowed for authorized private chats and the configured channel
     bot.onText(/\/rewards/, async (msg) => {
-      if (!isAuthorizedChat(notificationChatId, msg.chat.id, msg.chat.username || undefined)) {
+      const isChannel = msg.chat.type === 'channel';
+      const allowed = isChannel
+        ? isAuthorizedChat(notificationChatId, msg.chat.id, (msg.chat as any).username)
+        : isAuthorizedChat(notificationChatId, msg.chat.id, msg.chat.username || undefined);
+
+      if (!allowed) {
         await bot.sendMessage(msg.chat.id, 'Unauthorized chat ID');
         return;
       }
+
       await handleRewardsCommand(bot, msg.chat.id, backendUrl);
+    });
+
+    app.listen(port, () => {
+      console.log('[Bot] Express server listening', {
+        port,
+        env: nodeEnv,
+        webhookUrl,
+        backendUrl,
+      });
     });
   } catch (error) {
     console.error('[Bot] Failed to start bot:', error);
