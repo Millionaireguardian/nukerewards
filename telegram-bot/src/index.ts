@@ -99,6 +99,7 @@ function main(): void {
       });
 
     const app = express();
+    // JSON body parser must be registered before the webhook route
     app.use(express.json());
 
     app.get('/health', (_req: Request, res: Response) => {
@@ -106,8 +107,15 @@ function main(): void {
     });
 
     app.post(webhookPath, (req: Request, res: Response) => {
-      console.log('[Bot] Incoming update:', JSON.stringify(req.body));
-      bot.processUpdate(req.body);
+      try {
+        console.log('[Bot] Incoming update:', JSON.stringify(req.body));
+        // For node-telegram-bot-api, processUpdate forwards the update to handlers.
+        bot.processUpdate(req.body as any);
+      } catch (err) {
+        console.error('[Bot] Error handling update:', err);
+        // Intentionally fall through – we still return 200 to stop Telegram retries.
+      }
+      // Always respond 200 so Telegram does not retry and Railway does not 502.
       res.sendStatus(200);
     });
 
