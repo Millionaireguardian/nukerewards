@@ -12,9 +12,11 @@
     "update-transfer-fee": "tsx updateTransferFee.ts"
   },
   "dependencies": {
-    "@metaplex-foundation/mpl-token-metadata": "^3.2.1",
+    "@solana/web3.js": "^1.98.4",
     "@solana/spl-token": "^0.4.8",
-    "@solana/web3.js": "^1.98.4"
+    "@metaplex-foundation/umi": "^1.4.0",
+    "@metaplex-foundation/umi-bundle-defaults": "^1.4.0",
+    "@metaplex-foundation/mpl-token-metadata": "^3.2.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.27",
@@ -26,7 +28,9 @@
     "token",
     "token2022",
     "reward",
-    "spl-token"
+    "spl-token",
+    "umi",
+    "metaplex"
   ],
   "author": "",
   "license": "MIT"
