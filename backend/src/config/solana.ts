@@ -4,16 +4,39 @@ import { logger } from '../utils/logger';
 
 // Lazy initialization of Solana connection to allow server to start without Solana config
 let connectionInstance: Connection | null = null;
+const NETWORK = (env.SOLANA_NETWORK as string) || 'devnet';
+
+function validateRpcUrl(): string {
+  const rpcUrl = (env.HELIUS_RPC_URL as string) || '';
+
+  if (!rpcUrl) {
+    throw new Error('HELIUS_RPC_URL is required and must include ?api-key=');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rpcUrl);
+  } catch {
+    throw new Error('HELIUS_RPC_URL is invalid');
+  }
+
+  if (!parsed.searchParams.has('api-key')) {
+    throw new Error('HELIUS_RPC_URL must include ?api-key=');
+  }
+
+  const host = parsed.host;
+  logger.info('Helius RPC configured', {
+    host,
+    network: NETWORK,
+  });
+
+  return rpcUrl;
+}
 
 function getConnection(): Connection {
   if (!connectionInstance) {
-    const rpcUrl = (env.HELIUS_RPC_URL as string) || 'https://api.devnet.solana.com';
-    if (!rpcUrl || (typeof rpcUrl === 'string' && !rpcUrl.startsWith('http'))) {
-      logger.warn('Invalid or missing HELIUS_RPC_URL, using default devnet RPC');
-      connectionInstance = new Connection('https://api.devnet.solana.com', 'confirmed');
-    } else {
-      connectionInstance = new Connection(rpcUrl, 'confirmed');
-    }
+    const rpcUrl = validateRpcUrl();
+    connectionInstance = new Connection(rpcUrl, 'confirmed');
   }
   return connectionInstance;
 }
@@ -25,13 +48,11 @@ let tokenMintInstance: PublicKey | null = null;
 
 function getTokenMint(): PublicKey {
   if (!tokenMintInstance) {
-    const mintAddress = (env.TOKEN_MINT as string) || '8LF2FBaX47nmaZ1sBqs4Kg88t6VDbgDzjK3MQM7uPZZx';
+    const mintAddress = (env.TOKEN_MINT as string) || '';
     if (!mintAddress || typeof mintAddress !== 'string') {
-      logger.warn('TOKEN_MINT not set, using default');
-      tokenMintInstance = new PublicKey('8LF2FBaX47nmaZ1sBqs4Kg88t6VDbgDzjK3MQM7uPZZx');
-    } else {
-      tokenMintInstance = new PublicKey(mintAddress);
+      throw new Error('TOKEN_MINT is required');
     }
+    tokenMintInstance = new PublicKey(mintAddress);
   }
   return tokenMintInstance;
 }
@@ -45,10 +66,9 @@ export async function verifySolanaConnection(): Promise<void> {
   try {
     const conn = getConnection();
     const version = await conn.getVersion();
-    const rpcUrl = (env.HELIUS_RPC_URL as string) || 'https://api.devnet.solana.com';
     logger.info('Solana connection verified', {
-      network: (env.SOLANA_NETWORK as string) || 'devnet',
-      rpcUrl: rpcUrl.replace(/api-key=[^&]+/, 'api-key=***'),
+      network: NETWORK,
+      rpcHost: new URL((env.HELIUS_RPC_URL as string)).host,
       version: version['solana-core'],
       tokenMint: getTokenMint().toBase58(),
     });
