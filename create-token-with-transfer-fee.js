@@ -27,7 +27,6 @@ import {
 } from '@solana/spl-token';
 import mplTokenMetadata from '@metaplex-foundation/mpl-token-metadata';
 const { createCreateMetadataAccountV3Instruction } = mplTokenMetadata;
-import * as fs from 'fs';
 import { CONFIG } from './config.js';
 
 // Get connection
@@ -36,18 +35,18 @@ const connection = new Connection(
   'confirmed'
 );
 
-// Load wallet
+// Load wallet from environment
+if (!process.env.ADMIN_WALLET_JSON) {
+  throw new Error('ADMIN_WALLET_JSON environment variable is required');
+}
+
 let adminWallet;
 try {
-  const keypairPath = CONFIG.wallet.keypairPath;
-  if (!fs.existsSync(keypairPath)) {
-    throw new Error(`Keypair file not found at: ${keypairPath}`);
-  }
-  const secretKey = JSON.parse(fs.readFileSync(keypairPath, 'utf-8'));
-  adminWallet = Keypair.fromSecretKey(new Uint8Array(secretKey));
+  const secretKey = Uint8Array.from(JSON.parse(process.env.ADMIN_WALLET_JSON));
+  adminWallet = Keypair.fromSecretKey(secretKey);
   console.log('✅ Admin Wallet Address:', adminWallet.publicKey.toBase58());
 } catch (error) {
-  console.error('❌ Error loading wallet:', error.message);
+  console.error('❌ Error loading wallet from ADMIN_WALLET_JSON:', error instanceof Error ? error.message : String(error));
   process.exit(1);
 }
 
