@@ -25,6 +25,7 @@ function getWebhookUrl(): string {
   return normalized.replace(/\/+$/, '');
 }
 
+// Parse TELEGRAM_CHAT_IDS="id1,id2,..." into a string[] of numeric chat IDs.
 function parseAuthorizedChatIds(raw: string): string[] {
   return raw
     .split(',')
@@ -32,39 +33,20 @@ function parseAuthorizedChatIds(raw: string): string[] {
     .filter((id) => id.length > 0);
 }
 
-function isAuthorizedChat(allowedIds: string[], chatId?: number, username?: string): boolean {
-  if (!allowedIds.length) return true;
-  if (chatId !== undefined) {
-    const idAsString = String(chatId);
-    if (allowedIds.includes(idAsString)) {
-      return true;
-    }
-  }
-  if (username) {
-    const handle = username.startsWith('@') ? username : `@${username}`;
-    if (allowedIds.includes(handle)) {
-      return true;
-    }
-  }
-  return false;
-}
-
+// Check if either the message chat ID or (for forwarded messages) the original
+// channel chat ID is present in TELEGRAM_CHAT_IDS. We intentionally only look
+// at numeric IDs here (no username-based auth) for clarity and safety.
 function isAuthorizedMessage(allowedIds: string[], msg: TelegramBot.Message): boolean {
   const chatId = msg.chat?.id;
-  // username for private/group/supergroup; for channels it's on chat.username
-  const chatUsername = (msg.chat as any)?.username ?? msg.chat?.username ?? msg.chat?.['username'];
   const fwdChatId = msg.forward_from_chat?.id;
-  const fwdUsername = msg.forward_from_chat?.username;
 
-  const directAllowed = isAuthorizedChat(allowedIds, chatId, chatUsername);
-  const forwardAllowed = isAuthorizedChat(allowedIds, fwdChatId, fwdUsername);
+  const directAllowed = chatId !== undefined && allowedIds.includes(String(chatId));
+  const forwardAllowed = fwdChatId !== undefined && allowedIds.includes(String(fwdChatId));
 
   console.log('[Auth] check', {
     allowedIds,
     chatId,
-    chatUsername,
     forwardChatId: fwdChatId,
-    forwardUsername: fwdUsername,
     directAllowed,
     forwardAllowed,
   });
