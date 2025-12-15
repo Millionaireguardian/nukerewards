@@ -15,31 +15,21 @@ import {
   createAssociatedTokenAccountInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
-import mplTokenMetadata from '@metaplex-foundation/mpl-token-metadata';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import {
+  createSignerFromKeypair,
+  keypairIdentity,
+  publicKey as umiPublicKey,
+  none,
+} from '@metaplex-foundation/umi';
+import { createMetadataAccountV3 } from '@metaplex-foundation/mpl-token-metadata';
 import * as fs from 'fs';
 import { CONFIG } from './config.js';
-
-// Destructure metadata helpers safely
-const {
-  createCreateMetadataAccountV3Instruction,
-  createCreateMetadataAccountV2Instruction,
-  createCreateMetadataAccountInstruction,
-} = mplTokenMetadata;
-
-const createMetadataInstruction =
-  createCreateMetadataAccountV3Instruction ||
-  createCreateMetadataAccountV2Instruction ||
-  createCreateMetadataAccountInstruction;
-
-if (!createMetadataInstruction) {
-  throw new Error(
-    'Cannot find a metadata creation instruction (v3/v2/legacy) in mpl-token-metadata. Make sure to pin the module to version 1.7.0'
-  );
-}
 
 async function createToken() {
   // Connection
   const connection = new Connection(CONFIG.network[CONFIG.network.current], 'confirmed');
+  const umi = createUmi(CONFIG.network[CONFIG.network.current]);
 
   // Load admin wallet
   if (!process.env.ADMIN_WALLET_JSON) throw new Error('ADMIN_WALLET_JSON is required');
@@ -116,58 +106,6 @@ async function createToken() {
       ? CONFIG.metadata.creators
       : [{ address: adminWallet.publicKey, verified: true, share: 100 }];
 
-  const data = {
-    name: CONFIG.metadata.name,
-    symbol: CONFIG.metadata.symbol,
-    uri: CONFIG.metadata.uri || CONFIG.metadata.image || '',
-    sellerFeeBasisPoints: CONFIG.metadata.sellerFeeBasisPoints,
-    creators,
-    collection: null,
-    uses: null,
-  };
-
-  // Determine which version
-  const isV3 = createMetadataInstruction === createCreateMetadataAccountV3Instruction;
-  const isV2 = createMetadataInstruction === createCreateMetadataAccountV2Instruction;
-
-  const metadataIx = isV3
-    ? createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        {
-          createMetadataAccountArgsV3: { data, isMutable: true, collectionDetails: null },
-        }
-      )
-    : isV2
-    ? createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        { createMetadataAccountArgsV2: { data, isMutable: true } }
-      )
-    : createMetadataInstruction(
-        {
-          metadata: metadataPDA,
-          mint,
-          mintAuthority: mintAuthority.publicKey,
-          payer: adminWallet.publicKey,
-          updateAuthority: adminWallet.publicKey,
-        },
-        { createMetadataAccountArgs: { data, isMutable: true } }
-      );
-
-  transaction.add(metadataIx);
-  console.log('✅ Metadata instruction added');
-
   // Step 5: Send transaction
   const blockhashInfo = await connection.getLatestBlockhash('confirmed');
   transaction.recentBlockhash = blockhashInfo.blockhash;
@@ -184,6 +122,42 @@ async function createToken() {
 
   console.log('✅ Transaction confirmed:', signature);
   console.log(`Solscan: https://solscan.io/tx/${signature}?cluster=${CONFIG.network.current}`);
+
+  // Step 6: Create metadata via Umi (handles version compatibility)
+  console.log('📝 Creating metadata via Umi...');
+  const umiKeypair = umi.eddsa.createKeypairFromSecretKey(secretKey);
+  const umiSigner = createSignerFromKeypair(umi, umiKeypair);
+  umi.use(keypairIdentity(umiSigner));
+
+  const umiCreators = creators.map((c) => ({
+    address: umiPublicKey(
+      typeof c.address === 'string' ? c.address : c.address.toBase58()
+    ),
+    verified: !!c.verified,
+    share: c.share ?? 100,
+  }));
+
+  const umiMint = umiPublicKey(mint.toBase58());
+
+  const metadataTx = await createMetadataAccountV3(umi, {
+    mint: umiMint,
+    mintAuthority: umiSigner,
+    payer: umiSigner,
+    updateAuthority: umiSigner,
+    data: {
+      name: CONFIG.metadata.name,
+      symbol: CONFIG.metadata.symbol,
+      uri: CONFIG.metadata.uri || CONFIG.metadata.image || '',
+      sellerFeeBasisPoints: CONFIG.metadata.sellerFeeBasisPoints,
+      creators: umiCreators,
+      collection: none(),
+      uses: none(),
+      collectionDetails: none(),
+    },
+    isMutable: true,
+  }).sendAndConfirm(umi);
+
+  console.log('✅ Metadata transaction confirmed:', metadataTx);
 
   // Save token info
   const tokenInfo = {
