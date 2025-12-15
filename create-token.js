@@ -19,22 +19,25 @@ import mplTokenMetadata from '@metaplex-foundation/mpl-token-metadata';
 import * as fs from 'fs';
 import { CONFIG } from './config.js';
 
+// Destructure metadata helpers safely
+const {
+  createCreateMetadataAccountV3Instruction,
+  createCreateMetadataAccountV2Instruction,
+  createCreateMetadataAccountInstruction,
+} = mplTokenMetadata;
+
+const createMetadataInstruction =
+  createCreateMetadataAccountV3Instruction ||
+  createCreateMetadataAccountV2Instruction ||
+  createCreateMetadataAccountInstruction;
+
+if (!createMetadataInstruction) {
+  throw new Error(
+    'Cannot find a metadata creation instruction (v3/v2/legacy) in mpl-token-metadata. Make sure to pin the module to version 1.7.0'
+  );
+}
+
 async function createToken() {
-  const {
-    createCreateMetadataAccountV3Instruction,
-    createCreateMetadataAccountV2Instruction,
-    createCreateMetadataAccountInstruction,
-  } = mplTokenMetadata?.default ?? mplTokenMetadata;
-
-  const createMetadataInstruction =
-    createCreateMetadataAccountV3Instruction ||
-    createCreateMetadataAccountV2Instruction ||
-    createCreateMetadataAccountInstruction;
-
-  if (!createMetadataInstruction) {
-    throw new Error('Cannot find a metadata creation instruction (v3/v2/legacy) in mpl-token-metadata');
-  }
-
   // Connection
   const connection = new Connection(CONFIG.network[CONFIG.network.current], 'confirmed');
 
@@ -123,6 +126,7 @@ async function createToken() {
     uses: null,
   };
 
+  // Determine which version
   const isV3 = createMetadataInstruction === createCreateMetadataAccountV3Instruction;
   const isV2 = createMetadataInstruction === createCreateMetadataAccountV2Instruction;
 
@@ -136,11 +140,7 @@ async function createToken() {
           updateAuthority: adminWallet.publicKey,
         },
         {
-          createMetadataAccountArgsV3: {
-            data,
-            isMutable: true,
-            collectionDetails: null,
-          },
+          createMetadataAccountArgsV3: { data, isMutable: true, collectionDetails: null },
         }
       )
     : isV2
@@ -152,12 +152,7 @@ async function createToken() {
           payer: adminWallet.publicKey,
           updateAuthority: adminWallet.publicKey,
         },
-        {
-          createMetadataAccountArgsV2: {
-            data,
-            isMutable: true,
-          },
-        }
+        { createMetadataAccountArgsV2: { data, isMutable: true } }
       )
     : createMetadataInstruction(
         {
@@ -167,12 +162,7 @@ async function createToken() {
           payer: adminWallet.publicKey,
           updateAuthority: adminWallet.publicKey,
         },
-        {
-          createMetadataAccountArgs: {
-            data,
-            isMutable: true,
-          },
-        }
+        { createMetadataAccountArgs: { data, isMutable: true } }
       );
 
   transaction.add(metadataIx);
