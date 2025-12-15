@@ -19,7 +19,7 @@ PORT=10000
 #### Solana Configuration
 ```bash
 SOLANA_NETWORK=devnet
-HELIUS_RPC_URL=https://devnet.helius-rpc.com/?api-key=YOUR_HELIUS_API_KEY
+HELIUS_RPC_URL=https://devnet.helius-rpc.com/?api-key=4e637579-10e2-40d8-8ead-87a929a9c6aa
 TOKEN_MINT=8LF2FBaX47nmaZ1sBqs4Kg88t6VDbgDzjK3MQM7uPZZx
 ```
 
