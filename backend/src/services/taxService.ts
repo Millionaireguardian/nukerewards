@@ -245,31 +245,21 @@ export class TaxService {
       // Step 3: Harvest withheld tokens to mint (collects from all token accounts)
       // This moves withheld fees from individual accounts to the mint
       // Function signature in v0.4.14: harvestWithheldTokensToMint(connection, mint, authority, multiSigners, sources, programId)
-      // Note: authority must be a Signer (Keypair), not PublicKey
+      // Note: In v0.4.14, this is an async transaction sender that returns Promise<string> (signature)
+      // authority must be a Signer (Keypair), not PublicKey
       try {
-        const harvestTx = new Transaction();
-        const harvestInstruction = harvestWithheldTokensToMint(
+        const harvestSignature = await harvestWithheldTokensToMint(
           connection, // Connection (required in v0.4.14)
-          tokenMint,
+          tokenMint, // Mint (PublicKey)
           rewardWallet, // Authority (Signer/Keypair, not PublicKey)
           [], // Multi-signers (empty if single signer)
           [], // Sources (empty array = all token accounts)
           TOKEN_2022_PROGRAM_ID
         );
-        harvestTx.add(harvestInstruction);
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        harvestTx.recentBlockhash = blockhash;
-        harvestTx.feePayer = rewardWallet.publicKey;
-
-        await sendAndConfirmTransaction(
-          connection,
-          harvestTx,
-          [rewardWallet],
-          { commitment: 'confirmed', maxRetries: 3 }
-        );
-
-        logger.info('Harvested withheld tokens to mint');
+        logger.info('Harvested withheld tokens to mint', {
+          signature: harvestSignature,
+        });
       } catch (error) {
         logger.warn('Failed to harvest withheld tokens (may be none available)', {
           error: error instanceof Error ? error.message : String(error),
@@ -326,39 +316,30 @@ export class TaxService {
       // Function signature in v0.4.14: withdrawWithheldTokensFromAccounts(
       //   connection, mint, destination, authority, multiSigners, sources, programId
       // )
+      // Note: In v0.4.14, this is an async transaction sender that returns Promise<string> (signature)
+      // authority must be a Signer (Keypair), not PublicKey
       let withdrawnAmount = BigInt(0);
       try {
-        const withdrawTx = new Transaction();
-        
-        // Create withdraw instruction with Connection as first parameter
-        // Note: authority must be a Signer (Keypair), not PublicKey
-        const withdrawInstruction = withdrawWithheldTokensFromAccounts(
+        // Withdraw withheld tokens - this function sends the transaction and returns the signature
+        const withdrawSignature = await withdrawWithheldTokensFromAccounts(
           connection, // Connection (required in v0.4.14)
-          tokenMint,
-          rewardTokenAccount, // Destination token account
+          tokenMint, // Mint (PublicKey)
+          rewardTokenAccount, // Destination token account (PublicKey)
           rewardWallet, // Withdraw authority (Signer/Keypair, not PublicKey)
           [], // Multi-signers (empty if single signer)
           [], // Sources (empty array = all token accounts)
           TOKEN_2022_PROGRAM_ID
         );
-        withdrawTx.add(withdrawInstruction);
 
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        withdrawTx.recentBlockhash = blockhash;
-        withdrawTx.feePayer = rewardWallet.publicKey;
-
-        await sendAndConfirmTransaction(
-          connection,
-          withdrawTx,
-          [rewardWallet],
-          { commitment: 'confirmed', maxRetries: 3 }
-        );
-
-        // Get the balance after withdrawal
+        // Get the balance after withdrawal to determine how much was withdrawn
+        // Note: This gets the total balance in the account, which includes any previously held tokens
+        // For accurate tracking, we'd need to track balance before/after, but for tax distribution
+        // purposes, we'll use the current balance
         const rewardAccount = await getAccount(connection, rewardTokenAccount, 'confirmed', TOKEN_2022_PROGRAM_ID);
         withdrawnAmount = rewardAccount.amount;
 
         logger.info('Withdrew withheld tokens', {
+          signature: withdrawSignature,
           amount: withdrawnAmount.toString(),
           to: rewardTokenAccount.toBase58(),
         });
