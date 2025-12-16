@@ -52,6 +52,7 @@ type RewardApiResponse = {
   dex?: {
     name: string;
     price: number | null;
+    priceUSD: number | null;
     liquidityUSD: number | null;
     source: string;
     updatedAt: string;
@@ -68,8 +69,27 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
 
   const lastRunDisplay = rewards.lastRun ? new Date(rewards.lastRun).toLocaleString() : 'Never';
   const nextRunDisplay = rewards.nextRun ? new Date(rewards.nextRun).toLocaleString() : 'N/A';
-  const priceSource = rewards.tokenPrice.source || 'fallback';
-  const priceSourceDisplay = priceSource === 'jupiter' ? 'Jupiter' : priceSource === 'raydium' ? 'Raydium' : 'Default';
+
+  // Prioritize Raydium price if available, otherwise use tokenPrice
+  let priceUSD = rewards.tokenPrice.usd;
+  let priceSource = 'Raydium';
+  
+  // If Raydium DEX data is available, use its price (converted to USD)
+  if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.priceUSD !== null && rewards.dex.priceUSD > 0) {
+    priceUSD = rewards.dex.priceUSD;
+    priceSource = 'Raydium';
+  } else if (rewards.tokenPrice.source === 'raydium') {
+    priceSource = 'Raydium';
+  } else if (rewards.tokenPrice.source === 'jupiter') {
+    priceSource = 'Jupiter';
+  } else {
+    priceSource = 'Default';
+  }
+
+  // Get pool liquidity from Raydium if available
+  const poolLiquidity = rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.liquidityUSD 
+    ? rewards.dex.liquidityUSD 
+    : null;
 
   const messageLines = [
     '📊 Reward System Status',
@@ -79,24 +99,19 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
     `Status: ${rewards.isRunning ? 'Running' : 'Idle'}`,
     '',
     'Statistics:',
-    `• Total Holders: ${rewards.statistics.totalHolders}`,
-    `• Eligible Holders: ${rewards.statistics.eligibleHolders}`,
-    `• Pending Payouts: ${rewards.statistics.pendingPayouts}`,
-    `• Total SOL Distributed: ${rewards.statistics.totalSOLDistributed.toFixed(6)}`,
-    `• Token Price (USD): ${rewards.tokenPrice.usd.toFixed(4)} (${priceSourceDisplay})`,
+    `• Price (USD): ${priceUSD.toFixed(4)}`,
   ];
 
-  // Add Raydium DEX info if available
-  if (rewards.dex && rewards.dex.source === 'raydium') {
-    messageLines.push('');
-    messageLines.push('DEX: Raydium (Devnet)');
-    if (rewards.dex.price !== null) {
-      messageLines.push(`Price: $${rewards.dex.price.toFixed(8)} (Raydium)`);
-    }
-    if (rewards.dex.liquidityUSD !== null) {
-      messageLines.push(`Liquidity: $${rewards.dex.liquidityUSD.toLocaleString()}`);
-    }
+  // Add Pool Liquidity (PL) if available from Raydium
+  if (poolLiquidity !== null) {
+    messageLines.push(`• PL: $${poolLiquidity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
   }
+
+  messageLines.push(
+    `• Total Holders: ${rewards.statistics.totalHolders}`,
+    `• Pending Payouts: ${rewards.statistics.pendingPayouts}`,
+    `• SOL Distributed: ${rewards.statistics.totalSOLDistributed.toFixed(6)}`
+  );
 
   const message = messageLines.join('\n');
 

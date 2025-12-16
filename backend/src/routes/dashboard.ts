@@ -135,6 +135,17 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     const raydiumData = await getRaydiumData().catch(() => null);
     const priceSource = getPriceSource();
 
+    // Calculate Raydium price in USD if available
+    let raydiumPriceUSD: number | null = null;
+    if (raydiumData && raydiumData.source === 'raydium' && raydiumData.price) {
+      // Import getRaydiumPriceUSD to get USD price
+      const { getRaydiumPriceUSD } = await import('../services/raydiumService');
+      raydiumPriceUSD = await getRaydiumPriceUSD().catch(() => null);
+    }
+
+    // Use Raydium price if available, otherwise use tokenPriceUSD
+    const displayPrice = raydiumPriceUSD !== null ? raydiumPriceUSD : tokenPriceUSD;
+
     const response = {
       lastRun: schedulerStatus.lastRun ? new Date(schedulerStatus.lastRun).toISOString() : null,
       nextRun: schedulerStatus.nextRun ? new Date(schedulerStatus.nextRun).toISOString() : null,
@@ -148,12 +159,13 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         totalSOLDistributed: parseFloat(totalSOLDistributed.toFixed(6)),
       },
       tokenPrice: {
-        usd: parseFloat(tokenPriceUSD.toFixed(6)),
+        usd: parseFloat(displayPrice.toFixed(6)),
         source: priceSource,
       },
       dex: raydiumData && raydiumData.source === 'raydium' ? {
         name: 'raydium',
         price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null,
+        priceUSD: raydiumPriceUSD ? parseFloat(raydiumPriceUSD.toFixed(6)) : null,
         liquidityUSD: raydiumData.liquidityUSD ? parseFloat(raydiumData.liquidityUSD.toFixed(2)) : null,
         source: 'raydium',
         updatedAt: raydiumData.updatedAt,
