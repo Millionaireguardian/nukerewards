@@ -13,6 +13,7 @@ import { generateCombinedExcel } from '../services/rewardExportService';
 import { getTokenHolders } from '../services/solanaService';
 import { getNUKEPriceUSD } from '../services/priceService';
 import { isBlacklisted } from '../config/blacklist';
+import { TaxService } from '../services/taxService';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let isRunning = false;
@@ -72,6 +73,27 @@ async function processRewards(): Promise<void> {
 
     // Execute payouts
     await executePayouts();
+
+    // Process withheld tax from Token-2022 transfers
+    // This distributes accumulated transfer fees (3% to reward wallet, 1% to treasury)
+    try {
+      logger.info('Processing withheld tax from Token-2022 transfers');
+      const taxResult = await TaxService.processWithheldTax();
+      if (taxResult) {
+        logger.info('Tax distribution completed', {
+          totalTax: taxResult.totalTax.toString(),
+          rewardAmount: taxResult.rewardAmount.toString(),
+          treasuryAmount: taxResult.treasuryAmount.toString(),
+        });
+      } else {
+        logger.debug('No withheld tax to process');
+      }
+    } catch (taxError) {
+      logger.error('Error processing withheld tax', {
+        error: taxError instanceof Error ? taxError.message : String(taxError),
+      });
+      // Don't throw - allow reward distribution to continue
+    }
 
     const endTime = Date.now();
     const duration = endTime - startTime;

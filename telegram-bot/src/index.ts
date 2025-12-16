@@ -57,6 +57,13 @@ type RewardApiResponse = {
     source: string;
     updatedAt: string;
   } | null;
+  tax?: {
+    totalTaxCollected: string;
+    totalRewardAmount: string;
+    totalTreasuryAmount: string;
+    lastTaxDistribution: string | null;
+    distributionCount: number;
+  };
 };
 
 /**
@@ -112,6 +119,28 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
     `• Pending Payouts: ${rewards.statistics.pendingPayouts}`,
     `• SOL Distributed: ${rewards.statistics.totalSOLDistributed.toFixed(6)}`
   );
+
+  // Add tax information if available
+  if (rewards.tax) {
+    const taxTotal = BigInt(rewards.tax.totalTaxCollected || '0');
+    const taxReward = BigInt(rewards.tax.totalRewardAmount || '0');
+    const taxTreasury = BigInt(rewards.tax.totalTreasuryAmount || '0');
+    
+    // Convert from token units to readable format (assuming 6 decimals)
+    const decimals = 6;
+    const taxTotalFormatted = (Number(taxTotal) / Math.pow(10, decimals)).toFixed(2);
+    const taxRewardFormatted = (Number(taxReward) / Math.pow(10, decimals)).toFixed(2);
+    const taxTreasuryFormatted = (Number(taxTreasury) / Math.pow(10, decimals)).toFixed(2);
+    
+    messageLines.push(
+      '',
+      'Tax Distribution (4%):',
+      `• Total Collected: ${taxTotalFormatted} NUKE`,
+      `• Reward Pool (3%): ${taxRewardFormatted} NUKE`,
+      `• Treasury (1%): ${taxTreasuryFormatted} NUKE`,
+      `• Distributions: ${rewards.tax.distributionCount}`
+    );
+  }
 
   const message = messageLines.join('\n');
 

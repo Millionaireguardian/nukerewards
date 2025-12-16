@@ -150,6 +150,10 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     // This ensures consistent pricing across the system
     const displayPrice = tokenPriceUSD;
 
+    // Get tax statistics
+    const { TaxService } = await import('../services/taxService');
+    const taxStats = TaxService.getTaxStatistics();
+
     const response = {
       lastRun: schedulerStatus.lastRun ? new Date(schedulerStatus.lastRun).toISOString() : null,
       nextRun: schedulerStatus.nextRun ? new Date(schedulerStatus.nextRun).toISOString() : null,
@@ -174,6 +178,13 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         source: 'raydium',
         updatedAt: raydiumData.updatedAt,
       } : null,
+      tax: {
+        totalTaxCollected: taxStats.totalTaxCollected,
+        totalRewardAmount: taxStats.totalRewardAmount,
+        totalTreasuryAmount: taxStats.totalTreasuryAmount,
+        lastTaxDistribution: taxStats.lastTaxDistribution ? new Date(taxStats.lastTaxDistribution).toISOString() : null,
+        distributionCount: taxStats.distributionCount,
+      },
       filtered: filterPubkey ? {
         pubkey: filterPubkey,
         eligible: filteredEligible.length > 0,
