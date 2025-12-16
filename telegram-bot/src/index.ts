@@ -80,13 +80,14 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
   let priceSOL: number | null = null;
   let priceSource = 'Raydium';
   
-  // Prioritize Raydium DEX price if available
-  if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.price !== null) {
+  // Prioritize tokenPrice.sol from backend (direct Raydium fetch)
+  if (rewards.tokenPrice.sol !== null && rewards.tokenPrice.sol > 0) {
+    priceSOL = rewards.tokenPrice.sol;
+    priceSource = rewards.tokenPrice.source === 'raydium' ? 'Raydium' : 'Unknown';
+  } else if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.price !== null && rewards.dex.price > 0) {
+    // Fallback to dex price if tokenPrice not available
     priceSOL = rewards.dex.price;
     priceSource = 'Raydium';
-  } else if (rewards.tokenPrice.sol !== null) {
-    priceSOL = rewards.tokenPrice.sol;
-    priceSource = rewards.tokenPrice.source || 'Raydium';
   }
 
   const messageLines = [
@@ -100,10 +101,10 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
   ];
 
   // Add price in SOL
-  if (priceSOL !== null) {
+  if (priceSOL !== null && priceSOL > 0) {
     messageLines.push(`• Price: ${priceSOL.toFixed(8)} SOL (${priceSource})`);
   } else {
-    messageLines.push(`• Price: N/A (${priceSource})`);
+    messageLines.push(`• Price: N/A (Raydium pool unavailable)`);
   }
 
   messageLines.push(

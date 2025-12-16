@@ -153,7 +153,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         totalSOLDistributed: parseFloat(totalSOLDistributed.toFixed(6)),
       },
       tokenPrice: {
-        sol: tokenPriceSOL.price !== null ? parseFloat(tokenPriceSOL.price.toFixed(8)) : null,
+        sol: tokenPriceSOL.price !== null && tokenPriceSOL.price > 0 ? parseFloat(tokenPriceSOL.price.toFixed(8)) : null,
         usd: null, // Not used for devnet (SOL-only pricing)
         source: tokenPriceSOL.source || null,
       },
