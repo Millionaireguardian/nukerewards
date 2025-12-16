@@ -164,7 +164,13 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
         <div className="stat-card highlight">
           <div className="stat-label">Total SOL Distributed</div>
           <div className="stat-value stat-sol">
-            {(stats.totalSOLDistributed || 0).toFixed(6)} SOL
+            {(() => {
+              const sol = stats.totalSOLDistributed;
+              if (sol === null || sol === undefined || isNaN(sol)) {
+                return '0.000000 SOL';
+              }
+              return `${Number(sol).toFixed(6)} SOL`;
+            })()}
           </div>
         </div>
       </div>
