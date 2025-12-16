@@ -248,13 +248,15 @@ export class TaxService {
       // Note: In v0.4.14, this is an async transaction sender that returns Promise<string> (signature)
       // authority must be a Signer (Keypair), not PublicKey
       try {
+        // harvestWithheldTokensToMint is an async transaction sender
+        // Signature: harvestWithheldTokensToMint(connection, authority, mint, sources, confirmOptions) - 5 parameters
+        const emptySources: PublicKey[] = []; // Explicitly typed empty array for sources
         const harvestSignature = await harvestWithheldTokensToMint(
-          connection, // Connection (required in v0.4.14)
-          tokenMint, // Mint (PublicKey)
-          rewardWallet, // Authority (Signer/Keypair, not PublicKey)
-          [], // Multi-signers (empty if single signer)
-          [], // Sources (empty array = all token accounts)
-          TOKEN_2022_PROGRAM_ID
+          connection, // Connection (first parameter)
+          rewardWallet, // Authority (Signer/Keypair) - second parameter
+          tokenMint, // Mint (PublicKey) - third parameter
+          emptySources, // Sources (PublicKey[] - empty array = all token accounts)
+          { commitment: 'confirmed' } // ConfirmOptions (programId determined from connection)
         );
 
         logger.info('Harvested withheld tokens to mint', {
@@ -320,15 +322,18 @@ export class TaxService {
       // authority must be a Signer (Keypair), not PublicKey
       let withdrawnAmount = BigInt(0);
       try {
-        // Withdraw withheld tokens - this function sends the transaction and returns the signature
+        // withdrawWithheldTokensFromAccounts is an async transaction sender
+        // Signature: withdrawWithheldTokensFromAccounts(connection, authority, mint, destination, programId, multiSigners, sources) - 7 parameters
+        const emptySources: PublicKey[] = []; // Explicitly typed empty array for sources
+        const emptySigners: Keypair[] = []; // Explicitly typed empty array for multiSigners
         const withdrawSignature = await withdrawWithheldTokensFromAccounts(
-          connection, // Connection (required in v0.4.14)
-          tokenMint, // Mint (PublicKey)
-          rewardTokenAccount, // Destination token account (PublicKey)
-          rewardWallet, // Withdraw authority (Signer/Keypair, not PublicKey)
-          [], // Multi-signers (empty if single signer)
-          [], // Sources (empty array = all token accounts)
-          TOKEN_2022_PROGRAM_ID
+          connection, // Connection (first parameter)
+          rewardWallet, // Withdraw authority (Signer/Keypair) - second parameter
+          tokenMint, // Mint (PublicKey) - third parameter
+          rewardTokenAccount, // Destination token account (PublicKey) - fourth parameter
+          TOKEN_2022_PROGRAM_ID, // Program ID
+          emptySigners, // Multi-signers (empty if single signer)
+          emptySources // Sources (PublicKey[] - empty array = all token accounts)
         );
 
         // Get the balance after withdrawal to determine how much was withdrawn
