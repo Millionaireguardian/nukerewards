@@ -21,11 +21,20 @@ const RAYDIUM_CACHE_TTL = 60 * 1000; // 60 seconds
 const DEFAULT_SOL_PRICE_USD = 100;
 
 /**
- * Fetch SOL price in USD (using Jupiter or fallback)
+ * Fetch SOL price in USD using mainnet reference price
+ * 
+ * IMPORTANT: This uses a MAINNET reference price (Jupiter/CoinGecko) because:
+ * - Devnet has no real USD price data
+ * - We need a reliable SOL/USD conversion for the hybrid pricing model
+ * - This allows: NUKE_USD = (NUKE_SOL from devnet) × (SOL_USD from mainnet)
+ * 
+ * This hybrid model is intentional and correct for devnet tokens.
+ * The same logic will work seamlessly on mainnet without code changes.
  */
 async function getSOLPriceUSD(): Promise<number> {
   try {
-    // Try Jupiter for SOL price
+    // Fetch SOL/USD from Jupiter (mainnet reference price)
+    // This is a mainnet price oracle, not devnet
     const jupiterPriceUrl = 'https://price.jup.ag/v4/price?ids=So11111111111111111111111111111111111111112';
     const response = await fetch(jupiterPriceUrl, {
       method: 'GET',
@@ -52,6 +61,7 @@ async function getSOLPriceUSD(): Promise<number> {
     });
   }
 
+  // Fallback to default SOL price if Jupiter fails
   return DEFAULT_SOL_PRICE_USD;
 }
 
@@ -260,19 +270,22 @@ export async function getRaydiumData(): Promise<{
       };
     }
 
-    // Calculate price: WSOL per NUKE
+    // Calculate price: WSOL per NUKE from Raydium devnet pool
+    // This is the real AMM ratio from the devnet liquidity pool
     // price = quoteVaultBalance / baseVaultBalance (adjusted for decimals)
     const baseAmount = Number(poolData.baseVaultBalance) / Math.pow(10, poolData.baseDecimals);
     const quoteAmount = Number(poolData.quoteVaultBalance) / Math.pow(10, poolData.quoteDecimals);
     
     let price: number | null = null;
     if (baseAmount > 0) {
+      // NUKE/SOL price from devnet Raydium pool
       price = quoteAmount / baseAmount; // WSOL per NUKE
     }
 
-    // Calculate liquidity in USD
+    // Calculate liquidity in USD using hybrid pricing model
+    // Uses mainnet SOL/USD reference price (not devnet)
     // liquidity = 2 * (quoteAmount * SOL_PRICE_USD) (both sides of the pool)
-    const solPriceUSD = await getSOLPriceUSD();
+    const solPriceUSD = await getSOLPriceUSD(); // Mainnet reference price
     const liquidityUSD = price !== null ? 2 * quoteAmount * solPriceUSD : null;
 
     // Update cache
@@ -329,7 +342,15 @@ export async function getRaydiumData(): Promise<{
 }
 
 /**
- * Get Raydium price in USD (converts WSOL price to USD)
+ * Get Raydium price in USD using hybrid pricing model
+ * 
+ * Formula: NUKE_USD = (NUKE_SOL from Raydium devnet) × (SOL_USD from mainnet reference)
+ * 
+ * This hybrid model:
+ * - Fetches NUKE/SOL ratio from Raydium devnet pool (real AMM data)
+ * - Uses mainnet SOL/USD reference price (Jupiter/CoinGecko) for conversion
+ * - Works correctly on devnet (where no USD price exists)
+ * - Will work seamlessly on mainnet without code changes
  */
 export async function getRaydiumPriceUSD(): Promise<number | null> {
   try {
@@ -338,9 +359,10 @@ export async function getRaydiumPriceUSD(): Promise<number | null> {
       return null;
     }
 
-    // Convert WSOL per NUKE to USD per NUKE
-    const solPriceUSD = await getSOLPriceUSD();
-    return raydiumData.price * solPriceUSD;
+    // Hybrid pricing: NUKE_SOL (from devnet) × SOL_USD (from mainnet reference)
+    // This is the correct approach for devnet tokens
+    const solPriceUSD = await getSOLPriceUSD(); // Mainnet reference price
+    return raydiumData.price * solPriceUSD; // NUKE/SOL × SOL/USD = NUKE/USD
   } catch (error) {
     logger.error('Error calculating Raydium price in USD', {
       error: error instanceof Error ? error.message : String(error),

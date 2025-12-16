@@ -132,19 +132,23 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Get Raydium data and price source
+    // tokenPriceUSD already uses the hybrid pricing model (Raydium → Jupiter → Fallback)
+    // and getPriceSource() tracks which source was used
     const raydiumData = await getRaydiumData().catch(() => null);
-    const priceSource = getPriceSource();
+    const priceSource = getPriceSource(); // Tracks: 'raydium' | 'jupiter' | 'fallback'
 
-    // Calculate Raydium price in USD if available
+    // Calculate Raydium price in USD if available (for dex object)
+    // This uses the hybrid model: NUKE_SOL (devnet) × SOL_USD (mainnet reference)
     let raydiumPriceUSD: number | null = null;
     if (raydiumData && raydiumData.source === 'raydium' && raydiumData.price) {
-      // Import getRaydiumPriceUSD to get USD price
+      // Import getRaydiumPriceUSD to get USD price using hybrid model
       const { getRaydiumPriceUSD } = await import('../services/raydiumService');
       raydiumPriceUSD = await getRaydiumPriceUSD().catch(() => null);
     }
 
-    // Use Raydium price if available, otherwise use tokenPriceUSD
-    const displayPrice = raydiumPriceUSD !== null ? raydiumPriceUSD : tokenPriceUSD;
+    // Use tokenPriceUSD which already follows the correct priority (Raydium → Jupiter → Fallback)
+    // This ensures consistent pricing across the system
+    const displayPrice = tokenPriceUSD;
 
     const response = {
       lastRun: schedulerStatus.lastRun ? new Date(schedulerStatus.lastRun).toISOString() : null,

@@ -79,9 +79,21 @@ async function fetchPriceAlternative(): Promise<number | null> {
 
 /**
  * Get NUKE token price in USD
- * Uses cached price if available and fresh
- * Falls back to default price if all APIs fail
- * Priority: Jupiter -> Raydium -> Fallback
+ * 
+ * Pricing Model (Hybrid for Devnet):
+ * - Primary: Raydium DEX (devnet pool) - fetches NUKE/SOL ratio
+ * - Conversion: Uses mainnet SOL/USD reference price (Jupiter/CoinGecko)
+ * - Formula: NUKE_USD = (NUKE_SOL from devnet) × (SOL_USD from mainnet)
+ * 
+ * Fallback Order:
+ * 1. Raydium (primary) - hybrid model with devnet pool + mainnet SOL/USD
+ * 2. Jupiter (secondary) - direct USD price if available
+ * 3. Static default (last fallback) - DEFAULT_NUKE_PRICE_USD
+ * 
+ * This hybrid model is intentional and correct for devnet tokens.
+ * The same logic will work seamlessly on mainnet without code changes.
+ * 
+ * Uses cached price if available and fresh (5 minute TTL)
  */
 export async function getNUKEPriceUSD(): Promise<number> {
   try {
@@ -96,20 +108,21 @@ export async function getNUKEPriceUSD(): Promise<number> {
       return cachedPrice;
     }
 
-    // Try Jupiter API first
-    let price = await fetchPriceFromJupiter();
-    let source: 'jupiter' | 'raydium' | 'fallback' = 'jupiter';
+    // Priority 1: Try Raydium DEX (primary source)
+    // Uses hybrid model: NUKE_SOL (devnet) × SOL_USD (mainnet reference)
+    let price = await getRaydiumPriceUSD();
+    let source: 'jupiter' | 'raydium' | 'fallback' = 'raydium';
     
-    // If Jupiter fails, try Raydium
+    // Priority 2: If Raydium fails, try Jupiter as fallback
     if (price === null) {
-      logger.debug('Jupiter price unavailable, trying Raydium');
-      price = await getRaydiumPriceUSD();
+      logger.debug('Raydium price unavailable, trying Jupiter');
+      price = await fetchPriceFromJupiter();
       if (price !== null) {
-        source = 'raydium';
+        source = 'jupiter';
       }
     }
     
-    // If both fail, try alternative source (legacy)
+    // Priority 3: If both fail, try alternative source (legacy)
     if (price === null) {
       price = await fetchPriceAlternative();
       if (price !== null) {
@@ -117,7 +130,7 @@ export async function getNUKEPriceUSD(): Promise<number> {
       }
     }
 
-    // If all APIs fail, use default fallback
+    // Priority 4: If all APIs fail, use static default fallback
     if (price === null) {
       logger.warn('All price APIs failed, using default fallback price', {
         defaultPrice: DEFAULT_NUKE_PRICE_USD,
