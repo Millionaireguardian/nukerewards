@@ -95,7 +95,7 @@ export function HarvestPage() {
       header: 'Total SOL',
       accessor: (row) => (
         <span style={{ color: '#4a90e2', fontWeight: 600 }}>
-          {row.totalSOLDistributed.toFixed(6)} SOL
+          {(row.totalSOLDistributed || 0).toFixed(6)} SOL
         </span>
       ),
       sortable: true,
@@ -104,9 +104,9 @@ export function HarvestPage() {
     {
       key: 'tokenPriceUSD',
       header: 'Token Price (USD)',
-      accessor: (row) => `$${row.tokenPriceUSD.toFixed(6)}`,
+      accessor: (row) => `$${(row.tokenPriceUSD || 0).toFixed(6)}`,
       sortable: true,
-      sortFn: (a, b) => a.tokenPriceUSD - b.tokenPriceUSD,
+      sortFn: (a, b) => (a.tokenPriceUSD || 0) - (b.tokenPriceUSD || 0),
     },
   ];
 
@@ -126,10 +126,10 @@ export function HarvestPage() {
             ['Harvest Cycles Summary'],
             [''],
             ['Total Cycles', total],
-            ['Latest Eligible Holders', data.statistics.eligibleHolders],
-            ['Latest Excluded Holders', data.statistics.excludedHolders],
-            ['Latest Blacklisted Holders', data.statistics.blacklistedHolders],
-            ['Total SOL Distributed', data.statistics.totalSOLDistributed.toFixed(6)],
+            ['Latest Eligible Holders', data.statistics?.eligibleHolders || 0],
+            ['Latest Excluded Holders', data.statistics?.excludedHolders || 0],
+            ['Latest Blacklisted Holders', data.statistics?.blacklistedHolders || 0],
+            ['Total SOL Distributed', (data.statistics?.totalSOLDistributed || 0).toFixed(6)],
             ['Current Token Price (SOL)', data.tokenPrice.sol !== null && data.tokenPrice.sol > 0 
               ? data.tokenPrice.sol.toFixed(8) 
               : 'N/A'],
@@ -194,7 +194,7 @@ export function HarvestPage() {
           </div>
           <div className="summary-card highlight">
             <div className="card-label">Total SOL Distributed</div>
-            <div className="card-value">{data.statistics.totalSOLDistributed.toFixed(6)} SOL</div>
+            <div className="card-value">{(data.statistics?.totalSOLDistributed || 0).toFixed(6)} SOL</div>
           </div>
         </div>
       )}

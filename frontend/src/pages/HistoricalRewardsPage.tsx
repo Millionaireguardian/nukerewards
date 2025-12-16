@@ -214,7 +214,7 @@ export function HistoricalRewardsPage() {
         <div className="summary-item">
           <span className="summary-label">Latest SOL:</span>
           <span className="summary-value">
-            {data[data.length - 1]?.totalSOLDistributed.toFixed(6)} SOL
+            {(data[data.length - 1]?.totalSOLDistributed || 0).toFixed(6)} SOL
           </span>
         </div>
         <div className="summary-item">
@@ -226,7 +226,7 @@ export function HistoricalRewardsPage() {
         <div className="summary-item">
           <span className="summary-label">Total SOL (Period):</span>
           <span className="summary-value">
-            {data.reduce((sum, cycle) => sum + cycle.totalSOLDistributed, 0).toFixed(6)} SOL
+            {data.reduce((sum, cycle) => sum + (cycle.totalSOLDistributed || 0), 0).toFixed(6)} SOL
           </span>
         </div>
       </div>

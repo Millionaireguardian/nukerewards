@@ -44,7 +44,7 @@ export function DistributionPage() {
       header: 'Reward SOL',
       accessor: (row) => (
         <span style={{ color: '#4a90e2', fontWeight: 600 }}>
-          {row.rewardSOL.toFixed(6)} SOL
+          {(row.rewardSOL || 0).toFixed(6)} SOL
         </span>
       ),
       sortable: true,
@@ -124,7 +124,7 @@ export function DistributionPage() {
       // Prepare distribution sheet
       const distributionData = payouts.map((payout) => ({
         'Recipient Pubkey': payout.pubkey,
-        'Reward SOL': payout.rewardSOL.toFixed(6),
+        'Reward SOL': (payout.rewardSOL || 0).toFixed(6),
         Status: payout.status,
         'Retry Count': payout.retryCount,
         'Queued At': new Date(payout.queuedAt).toLocaleString(),
@@ -182,7 +182,7 @@ export function DistributionPage() {
         <div className="summary-stat highlight">
           <span className="stat-label">Total SOL:</span>
           <span className="stat-value stat-sol">
-            {payouts.reduce((sum, p) => sum + p.rewardSOL, 0).toFixed(6)} SOL
+            {payouts.reduce((sum, p) => sum + (p.rewardSOL || 0), 0).toFixed(6)} SOL
           </span>
         </div>
       </div>

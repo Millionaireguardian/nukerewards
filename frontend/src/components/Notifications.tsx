@@ -27,8 +27,12 @@ export function NotificationManager() {
         
         // Check for low balance (if backend provides balance info)
         // For now, we'll check if total SOL distributed is close to reward pool
-        const totalSOL = rewards.statistics.totalSOLDistributed;
-        const pendingPayouts = rewards.statistics.pendingPayouts;
+        if (!rewards || !rewards.statistics) {
+          return;
+        }
+        
+        const totalSOL = rewards.statistics.totalSOLDistributed || 0;
+        const pendingPayouts = rewards.statistics.pendingPayouts || 0;
         
         // Estimate if we might run out of SOL
         if (pendingPayouts > 0 && totalSOL > 0.9) {

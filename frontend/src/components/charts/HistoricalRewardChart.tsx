@@ -40,13 +40,18 @@ export function HistoricalRewardChart() {
         const response = await fetchRewards();
         
         // Create data point from current response
+        if (!response || !response.statistics) {
+          console.warn('Invalid response structure, skipping data point');
+          return;
+        }
+
         const now = new Date();
         const dataPoint: HistoricalDataPoint = {
           timestamp: now.toISOString(),
           date: now.toLocaleDateString(),
-          totalSOL: response.statistics.totalSOLDistributed,
-          eligibleHolders: response.statistics.eligibleHolders,
-          pendingPayouts: response.statistics.pendingPayouts,
+          totalSOL: response.statistics.totalSOLDistributed || 0,
+          eligibleHolders: response.statistics.eligibleHolders || 0,
+          pendingPayouts: response.statistics.pendingPayouts || 0,
         };
 
         // Load from localStorage for historical data
@@ -234,7 +239,7 @@ export function HistoricalRewardChart() {
         <div className="summary-item">
           <span className="summary-label">Latest SOL:</span>
           <span className="summary-value">
-            {data[data.length - 1]?.totalSOL.toFixed(6)} SOL
+            {(data[data.length - 1]?.totalSOL || 0).toFixed(6)} SOL
           </span>
         </div>
         <div className="summary-item">

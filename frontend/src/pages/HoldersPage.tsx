@@ -74,7 +74,7 @@ export function HoldersPage() {
     {
       key: 'usdValue',
       header: 'USD Value',
-      accessor: (row) => `$${row.usdValue.toFixed(2)}`,
+      accessor: (row) => `$${(row.usdValue || 0).toFixed(2)}`,
       sortable: true,
       sortFn: (a, b) => a.usdValue - b.usdValue,
     },

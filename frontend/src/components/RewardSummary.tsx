@@ -78,9 +78,15 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
     );
   }
 
-  if (!data) {
-    return null;
+  if (!data || !data.statistics) {
+    return (
+      <div className="reward-summary-container">
+        <div className="loading">Loading reward summary...</div>
+      </div>
+    );
   }
+
+  const stats = data.statistics;
 
   return (
     <div className="reward-summary-container">
@@ -112,7 +118,7 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
         <div className="summary-card highlight">
           <div className="card-label">NUKE Price</div>
           <div className="card-value">
-            {data.tokenPrice.sol !== null && data.tokenPrice.sol > 0
+            {data.tokenPrice?.sol !== null && data.tokenPrice?.sol !== undefined && data.tokenPrice.sol > 0
               ? `${data.tokenPrice.sol.toFixed(8)} SOL`
               : 'N/A (Raydium)'}
           </div>
@@ -122,37 +128,37 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
       <div className="statistics-grid">
         <div className="stat-card">
           <div className="stat-label">Total Holders</div>
-          <div className="stat-value">{data.statistics.totalHolders.toLocaleString()}</div>
+          <div className="stat-value">{(stats.totalHolders || 0).toLocaleString()}</div>
         </div>
 
         <div className="stat-card highlight">
           <div className="stat-label">Eligible Holders</div>
           <div className="stat-value stat-eligible">
-            {data.statistics.eligibleHolders.toLocaleString()}
+            {(stats.eligibleHolders || 0).toLocaleString()}
           </div>
         </div>
 
         <div className="stat-card">
           <div className="stat-label">Excluded Holders</div>
-          <div className="stat-value">{data.statistics.excludedHolders.toLocaleString()}</div>
+          <div className="stat-value">{(stats.excludedHolders || 0).toLocaleString()}</div>
         </div>
 
         <div className="stat-card">
           <div className="stat-label">Blacklisted</div>
-          <div className="stat-value">{data.statistics.blacklistedHolders.toLocaleString()}</div>
+          <div className="stat-value">{(stats.blacklistedHolders || 0).toLocaleString()}</div>
         </div>
 
         <div className="stat-card highlight">
           <div className="stat-label">Pending Payouts</div>
           <div className="stat-value stat-pending">
-            {data.statistics.pendingPayouts.toLocaleString()}
+            {(stats.pendingPayouts || 0).toLocaleString()}
           </div>
         </div>
 
         <div className="stat-card highlight">
           <div className="stat-label">Total SOL Distributed</div>
           <div className="stat-value stat-sol">
-            {data.statistics.totalSOLDistributed.toFixed(6)} SOL
+            {(stats.totalSOLDistributed || 0).toFixed(6)} SOL
           </div>
         </div>
       </div>

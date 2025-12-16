@@ -133,7 +133,7 @@ export function PayoutsTable({ refreshInterval = 60000 }: PayoutsTableProps) {
         </div>
         <div className="summary-badge highlight">
           <span className="badge-label">Total SOL:</span>
-          <span className="badge-value">{summary.totalSOL.toFixed(6)}</span>
+          <span className="badge-value">{(summary?.totalSOL || 0).toFixed(6)}</span>
         </div>
       </div>
 
