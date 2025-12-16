@@ -31,14 +31,14 @@ export function NotificationManager() {
           return;
         }
         
-        const totalSOL = rewards.statistics.totalSOLDistributed || 0;
-        const pendingPayouts = rewards.statistics.pendingPayouts || 0;
+        const totalSOL = rewards.statistics?.totalSOLDistributed || 0;
+        const pendingPayouts = rewards.statistics?.pendingPayouts || 0;
         
         // Estimate if we might run out of SOL
         if (pendingPayouts > 0 && totalSOL > 0.9) {
           if (!notificationState.lowBalance) {
             toast.warning(
-              `Low reward pool: ${totalSOL.toFixed(6)} SOL remaining. ${pendingPayouts} payouts pending.`,
+              `Low reward pool: ${(totalSOL || 0).toFixed(6)} SOL remaining. ${pendingPayouts} payouts pending.`,
               {
                 autoClose: 10000,
                 toastId: 'low-balance',

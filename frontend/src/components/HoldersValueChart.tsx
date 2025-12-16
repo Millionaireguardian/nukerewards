@@ -79,7 +79,7 @@ export function HoldersValueChart() {
           />
           <YAxis />
           <Tooltip
-            formatter={(value: number) => `$${value.toFixed(2)}`}
+            formatter={(value: number) => `$${(value || 0).toFixed(2)}`}
             labelFormatter={(label, payload) => {
               if (payload && payload[0]) {
                 return `Pubkey: ${payload[0].payload.pubkey}`;

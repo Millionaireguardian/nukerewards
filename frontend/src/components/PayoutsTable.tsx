@@ -62,11 +62,11 @@ export function PayoutsTable({ refreshInterval = 60000 }: PayoutsTableProps) {
       header: 'Reward SOL',
       accessor: (row) => (
         <span style={{ color: '#4a90e2', fontWeight: 600 }}>
-          {row.rewardSOL.toFixed(6)} SOL
+          {(row.rewardSOL || 0).toFixed(6)} SOL
         </span>
       ),
       sortable: true,
-      sortFn: (a, b) => a.rewardSOL - b.rewardSOL,
+      sortFn: (a, b) => (a.rewardSOL || 0) - (b.rewardSOL || 0),
     },
     {
       key: 'queuedAt',

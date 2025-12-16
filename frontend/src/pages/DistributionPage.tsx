@@ -107,7 +107,7 @@ export function DistributionPage() {
 
       const pendingCount = payouts.filter((p) => p.status === 'pending').length;
       const failedCount = payouts.filter((p) => p.status === 'failed').length;
-      const totalSOL = payouts.reduce((sum, p) => sum + p.rewardSOL, 0);
+      const totalSOL = payouts.reduce((sum, p) => sum + (p.rewardSOL || 0), 0);
 
       // Prepare summary sheet
       const summaryData = [
@@ -116,7 +116,7 @@ export function DistributionPage() {
         ['Total Payouts', payouts.length],
         ['Pending Payouts', pendingCount],
         ['Failed Payouts', failedCount],
-        ['Total SOL', totalSOL.toFixed(6)],
+        ['Total SOL', (totalSOL || 0).toFixed(6)],
         [''],
         ['Export Date', new Date().toLocaleString()],
       ];
