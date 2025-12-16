@@ -6,7 +6,7 @@ import { tokenMint } from '../config/solana';
  * Price Service - Devnet Only
  * 
  * Fetches NUKE token price in SOL from Raydium Devnet API.
- * Uses: https://api-v3-devnet.raydium.io/pairs
+ * Uses: https://api-v3-devnet.raydium.io/pools/info/ids
  * 
  * Returns price in SOL (SOL per NUKE) from Raydium Devnet API.
  */
@@ -22,16 +22,15 @@ let cachedPrice: PriceCache | null = null;
 const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Raydium API response structure
+ * Raydium Pool Info API response structure
  */
-interface RaydiumPair {
+interface RaydiumPoolInfo {
   id: string;
   baseMint: string;
   quoteMint: string;
   lpMint: string;
   baseDecimals: number;
   quoteDecimals: number;
-  quoteDecimalsValue: number;
   lpDecimals: number;
   version: number;
   programId: string;
@@ -58,64 +57,37 @@ interface RaydiumPair {
   quoteTokenTotal: number;
   lpTokenTotal: number;
   openOrdersReserve: number;
-  stakingInfo?: {
-    stakingVault: string;
-    stakingVaultNonce: number;
-    stakingVaultAuthority: string;
-  };
-  poolCoinTokenAccount?: string;
-  poolPcTokenAccount?: string;
-  ammOpenOrders?: string;
-  poolWithdrawQueue?: string;
-  poolTempLpTokenAccount?: string;
-  serumProgramId?: string;
-  serumMarket?: string;
-  serumBids?: string;
-  serumAsks?: string;
-  serumEventQueue?: string;
-  serumCoinVaultAccount?: string;
-  serumPcVaultAccount?: string;
-  serumVaultSigner?: string;
-  official: boolean;
-  status: string;
-  poolId?: string;
-  apy?: number;
-  fee?: number;
-  fee7d?: number;
-  fee24h?: number;
-  fee24hQuote?: number;
-  fee24hBase?: number;
-  liquidity?: number;
-  liquidityQuote?: number;
-  liquidityBase?: number;
-  volume24h?: number;
-  volume24hQuote?: number;
-  volume24hBase?: number;
-  volume7d?: number;
-  volume7dQuote?: number;
-  volume7dBase?: number;
-  volume30d?: number;
-  volume30dQuote?: number;
-  volume30dBase?: number;
   price?: number;
   priceNative?: number;
   priceUsd?: number;
   tvl?: number;
   tvlQuote?: number;
   tvlBase?: number;
+  apy?: number;
+  fee?: number;
+  fee7d?: number;
+  fee24h?: number;
+  liquidity?: number;
+  liquidityQuote?: number;
+  liquidityBase?: number;
+  volume24h?: number;
+  volume7d?: number;
+  volume30d?: number;
+  official?: boolean;
+  status?: string;
 }
 
-interface RaydiumApiResponse {
+interface RaydiumPoolInfoResponse {
   success: boolean;
-  data?: RaydiumPair[];
+  data?: RaydiumPoolInfo[];
   time?: number;
 }
 
 /**
  * Get NUKE token price in SOL from Raydium Devnet API
  * 
- * Uses Raydium Devnet API: https://api-v3-devnet.raydium.io/pairs
- * Filters by RAYDIUM_POOL_ID from environment variables.
+ * Uses Raydium Devnet API: https://api-v3-devnet.raydium.io/pools/info/ids
+ * Fetches pool info by RAYDIUM_POOL_ID from environment variables.
  * Extracts price (SOL per NUKE) from API response.
  * 
  * Returns: { price: number | null, source: 'raydium' | null }
@@ -157,14 +129,15 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
     }
 
     const poolIdString = poolId.toBase58();
+    const apiUrl = `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolIdString}`;
+    
     logger.info('Fetching NUKE price from Raydium Devnet API', {
       poolId: poolIdString,
       tokenMint: tokenMint.toBase58(),
-      apiUrl: 'https://api-v3-devnet.raydium.io/pairs',
+      apiUrl,
     });
 
-    // Step 2: Fetch pairs from Raydium Devnet API
-    const apiUrl = 'https://api-v3-devnet.raydium.io/pairs';
+    // Step 2: Fetch pool info from Raydium Devnet API
     const response = await fetch(apiUrl, {
       method: 'GET',
       headers: {
@@ -178,6 +151,7 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
         status: response.status,
         statusText: response.statusText,
         poolId: poolIdString,
+        apiUrl,
       });
       cachedPrice = {
         price: null,
@@ -190,13 +164,14 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
       };
     }
 
-    const apiData = await response.json() as RaydiumApiResponse;
+    const apiData = await response.json() as RaydiumPoolInfoResponse;
 
-    if (!apiData.success || !apiData.data || !Array.isArray(apiData.data)) {
-      logger.error('Invalid Raydium API response structure', {
+    if (!apiData.success || !apiData.data || !Array.isArray(apiData.data) || apiData.data.length === 0) {
+      logger.error('Invalid Raydium API response structure or pool not found', {
         success: apiData.success,
         hasData: !!apiData.data,
         isArray: Array.isArray(apiData.data),
+        dataLength: apiData.data?.length || 0,
         poolId: poolIdString,
       });
       cachedPrice = {
@@ -210,23 +185,14 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
       };
     }
 
-    // Step 3: Find pool by RAYDIUM_POOL_ID
-    const pool = apiData.data.find((pair) => {
-      // Check multiple possible ID fields
-      return (
-        pair.id === poolIdString ||
-        pair.poolId === poolIdString ||
-        pair.baseVault === poolIdString ||
-        pair.quoteVault === poolIdString ||
-        pair.marketId === poolIdString
-      );
-    });
+    // Step 3: Get the pool info (should be first item in array)
+    const pool = apiData.data[0];
 
-    if (!pool) {
-      logger.warn('Raydium pool not found in API response', {
+    if (!pool || pool.id !== poolIdString) {
+      logger.warn('Raydium pool ID mismatch in API response', {
+        requestedPoolId: poolIdString,
+        returnedPoolId: pool?.id,
         poolId: poolIdString,
-        totalPairs: apiData.data.length,
-        sampleIds: apiData.data.slice(0, 3).map(p => p.id),
       });
       cachedPrice = {
         price: null,
@@ -285,7 +251,7 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
 
     // Step 5: Validate and cache price
     if (price !== null && price > 0 && isFinite(price)) {
-      logger.info('NUKE token price fetched from Raydium Devnet API (SOL)', {
+      logger.info('NUKE token price fetched from Raydium (SOL)', {
         price,
         priceDescription: `${price} SOL per NUKE`,
         poolId: poolIdString,
@@ -391,15 +357,16 @@ export async function getPriceDiagnostics(): Promise<{
 }> {
   const poolId = getRaydiumPoolId();
   const now = Date.now();
+  const poolIdString = poolId?.toBase58() || '';
   
   return {
     poolIdSet: poolId !== null,
-    poolId: poolId?.toBase58(),
+    poolId: poolIdString,
     tokenMint: tokenMint.toBase58(),
     lastPrice: cachedPrice?.price || null,
     lastSource: cachedPrice?.source || null,
     lastFetchTime: cachedPrice ? new Date(cachedPrice.timestamp).toISOString() : null,
     cacheAge: cachedPrice ? now - cachedPrice.timestamp : null,
-    apiUrl: 'https://api-v3-devnet.raydium.io/pairs',
+    apiUrl: poolIdString ? `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolIdString}` : 'not set',
   };
 }
