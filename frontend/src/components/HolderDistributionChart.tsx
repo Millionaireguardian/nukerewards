@@ -25,24 +25,24 @@ export function HolderDistributionChart() {
     return () => clearInterval(interval);
   }, []);
 
-  if (loading || !data) {
+  if (loading || !data || !data.statistics) {
     return <div className="chart-loading">Loading chart data...</div>;
   }
 
   const chartData = [
     {
       name: 'Eligible',
-      value: data.statistics.eligibleHolders,
+      value: data.statistics.eligibleHolders || 0,
       color: '#28a745',
     },
     {
       name: 'Excluded',
-      value: data.statistics.excludedHolders,
+      value: data.statistics.excludedHolders || 0,
       color: '#ffc107',
     },
     {
       name: 'Blacklisted',
-      value: data.statistics.blacklistedHolders,
+      value: data.statistics.blacklistedHolders || 0,
       color: '#dc3545',
     },
   ].filter(item => item.value > 0);
@@ -82,7 +82,9 @@ export function HolderDistributionChart() {
       <div className="chart-summary">
         <div className="summary-item">
           <span className="summary-label">Total:</span>
-          <span className="summary-value">{data.statistics.totalHolders.toLocaleString()}</span>
+          <span className="summary-value">
+            {(data.statistics?.totalHolders || 0).toLocaleString()}
+          </span>
         </div>
       </div>
     </div>

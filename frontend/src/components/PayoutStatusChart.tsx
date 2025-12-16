@@ -63,7 +63,9 @@ export function PayoutStatusChart() {
       <div className="chart-summary">
         <div className="summary-item">
           <span className="summary-label">Total SOL:</span>
-          <span className="summary-value">{data.summary.totalSOL.toFixed(6)} SOL</span>
+          <span className="summary-value">
+            {data.summary?.totalSOL?.toFixed(6) || '0.000000'} SOL
+          </span>
         </div>
       </div>
     </div>

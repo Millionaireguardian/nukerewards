@@ -100,7 +100,8 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
     // Step 1: Get Raydium pool ID from environment
     const poolId = getRaydiumPoolId();
     if (!poolId) {
-      logger.warn('RAYDIUM_POOL_ID not set in environment variables');
+      logger.error('RAYDIUM_POOL_ID not set in environment variables - price cannot be fetched');
+      logger.error('Please set RAYDIUM_POOL_ID environment variable to the Raydium devnet pool ID');
       cachedPrice = {
         price: null,
         source: null,
@@ -254,9 +255,11 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
         poolId: poolId.toBase58(),
       });
     } else {
-      logger.warn('Raydium pool NUKE vault balance is zero', {
+      logger.error('Raydium pool NUKE vault balance is zero - cannot calculate price', {
         nukeVaultBalance: nukeVaultBalance.toString(),
         solVaultBalance: solVaultBalance.toString(),
+        nukeAmount: nukeAmount.toString(),
+        solAmount: solAmount.toString(),
         poolId: poolId.toBase58(),
       });
     }
@@ -315,4 +318,31 @@ export function getPriceSource(): 'raydium' | null {
 export function clearPriceCache(): void {
   cachedPrice = null;
   logger.debug('Price cache cleared');
+}
+
+/**
+ * Get diagnostic information about price fetching
+ * Useful for debugging why price might not be loading
+ */
+export async function getPriceDiagnostics(): Promise<{
+  poolIdSet: boolean;
+  poolId?: string;
+  tokenMint: string;
+  lastPrice: number | null;
+  lastSource: 'raydium' | null;
+  lastFetchTime: string | null;
+  cacheAge: number | null;
+}> {
+  const poolId = getRaydiumPoolId();
+  const now = Date.now();
+  
+  return {
+    poolIdSet: poolId !== null,
+    poolId: poolId?.toBase58(),
+    tokenMint: tokenMint.toBase58(),
+    lastPrice: cachedPrice?.price || null,
+    lastSource: cachedPrice?.source || null,
+    lastFetchTime: cachedPrice ? new Date(cachedPrice.timestamp).toISOString() : null,
+    cacheAge: cachedPrice ? now - cachedPrice.timestamp : null,
+  };
 }

@@ -22,19 +22,22 @@ export function RewardTrendsChart() {
         setCurrentData(response);
 
         // Add current data point to trend
-        const now = new Date().toLocaleTimeString();
-        const newPoint: TrendDataPoint = {
-          timestamp: now,
-          eligibleHolders: response.statistics.eligibleHolders,
-          pendingPayouts: response.statistics.pendingPayouts,
-          totalSOL: response.statistics.totalSOLDistributed,
-        };
+        if (response && response.statistics) {
+          const now = new Date().toLocaleTimeString();
+          const newPoint: TrendDataPoint = {
+            timestamp: now,
+            eligibleHolders: response.statistics.eligibleHolders || 0,
+            pendingPayouts: response.statistics.pendingPayouts || 0,
+            totalSOL: response.statistics.totalSOLDistributed || 0,
+          };
 
-        setTrendData(prev => {
-          const updated = [...prev, newPoint];
-          // Keep only last 20 data points
-          return updated.slice(-20);
-        });
+          setTrendData(prev => {
+            const updated = [...prev, newPoint];
+            // Keep only last 20 data points
+            return updated.slice(-20);
+          });
+        }
+
       } catch (error) {
         console.error('Error loading trend data:', error);
       }
@@ -97,7 +100,7 @@ export function RewardTrendsChart() {
           />
         </LineChart>
       </ResponsiveContainer>
-      {currentData && (
+      {currentData && currentData.statistics && (
         <div className="chart-summary">
           <div className="summary-item">
             <span className="summary-label">Current Eligible:</span>
@@ -105,7 +108,9 @@ export function RewardTrendsChart() {
           </div>
           <div className="summary-item">
             <span className="summary-label">Current SOL:</span>
-            <span className="summary-value">{currentData.statistics.totalSOLDistributed.toFixed(6)} SOL</span>
+            <span className="summary-value">
+              {currentData.statistics.totalSOLDistributed?.toFixed(6) || '0.000000'} SOL
+            </span>
           </div>
         </div>
       )}

@@ -43,7 +43,7 @@ export function HoldersValueChart() {
   const chartData = holders.map((holder, index) => ({
     name: `Holder ${index + 1}`,
     pubkey: holder.pubkey.substring(0, 8) + '...',
-    value: parseFloat(holder.usdValue.toFixed(2)),
+    value: parseFloat((holder.usdValue || 0).toFixed(2)),
     status: holder.eligibilityStatus,
   }));
 

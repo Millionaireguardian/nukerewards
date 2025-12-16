@@ -7,7 +7,7 @@ import {
 } from '../services/rewardService';
 import { getSchedulerStatus } from '../scheduler/rewardScheduler';
 import { getTokenHolders } from '../services/solanaService';
-import { getNUKEPriceSOL, getNUKEPriceUSD, getPriceSource } from '../services/priceService';
+import { getNUKEPriceSOL, getNUKEPriceUSD, getPriceSource, getPriceDiagnostics } from '../services/priceService';
 import { getRaydiumData } from '../services/raydiumService';
 import { isBlacklisted } from '../config/blacklist';
 import { REWARD_CONFIG } from '../config/constants';
