@@ -244,12 +244,13 @@ export async function fetchRewards(pubkey?: string): Promise<RewardsResponse> {
         filtered: null,
       };
     }
-    // Ensure tokenPrice exists in response
-    const rewardsData = response.data;
-    if (!rewardsData.tokenPrice) {
-      rewardsData.tokenPrice = { sol: null, usd: null, source: null };
-    }
-    return rewardsData;
+    // Temporarily skip tokenPrice validation for debugging
+    // const rewardsData = response.data;
+    // if (!rewardsData.tokenPrice) {
+    //   rewardsData.tokenPrice = { sol: null, usd: null, source: null };
+    // }
+    // return rewardsData;
+    return response.data;
   } catch (error: any) {
     if (isDevelopment) {
       console.error('[API] Error fetching rewards:', {

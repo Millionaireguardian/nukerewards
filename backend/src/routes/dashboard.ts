@@ -119,7 +119,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     const pendingPayouts = getPendingPayouts();
     const totalSOLDistributed = pendingPayouts
       .filter(p => !filterPubkey || p.pubkey === filterPubkey)
-      .reduce((sum, p) => sum + p.rewardSOL, 0);
+      .reduce((sum, p) => sum + (p.rewardSOL || 0), 0);
 
     // Calculate statistics
     const blacklistedCount = allHolders.filter(h => isBlacklisted(h.owner)).length;
@@ -150,7 +150,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         excludedHolders: excludedCount,
         blacklistedHolders: blacklistedCount,
         pendingPayouts: pendingPayouts.length,
-        totalSOLDistributed: parseFloat(totalSOLDistributed.toFixed(6)),
+        totalSOLDistributed: parseFloat((totalSOLDistributed || 0).toFixed(6)),
       },
       tokenPrice: {
         sol: tokenPriceSOL.price !== null && tokenPriceSOL.price > 0 ? parseFloat(tokenPriceSOL.price.toFixed(8)) : null,
@@ -175,7 +175,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         eligible: filteredEligible.length > 0,
         pendingPayouts: filteredPending.length,
         totalSOLForHolder: parseFloat(
-          filteredPending.reduce((sum, p) => sum + p.rewardSOL, 0).toFixed(6)
+          filteredPending.reduce((sum, p) => sum + (p.rewardSOL || 0), 0).toFixed(6)
         ),
       } : null,
     };

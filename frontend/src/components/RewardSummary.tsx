@@ -86,10 +86,10 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
     );
   }
 
-  // Ensure tokenPrice exists
-  if (!data.tokenPrice) {
-    data.tokenPrice = { sol: null, usd: null, source: null };
-  }
+  // Temporarily skip tokenPrice validation for debugging
+  // if (!data.tokenPrice) {
+  //   data.tokenPrice = { sol: null, usd: null, source: null };
+  // }
 
   const stats = data.statistics;
 
@@ -120,14 +120,15 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
           </div>
         </div>
 
-        <div className="summary-card highlight">
+        {/* Temporarily removed token price display for debugging */}
+        {/* <div className="summary-card highlight">
           <div className="card-label">NUKE Price</div>
           <div className="card-value">
             {data.tokenPrice?.sol !== null && data.tokenPrice?.sol !== undefined && (data.tokenPrice?.sol || 0) > 0
               ? `${(data.tokenPrice?.sol || 0).toFixed(8)} SOL`
               : 'N/A (Raydium)'}
           </div>
-        </div>
+        </div> */}
       </div>
 
       <div className="statistics-grid">
