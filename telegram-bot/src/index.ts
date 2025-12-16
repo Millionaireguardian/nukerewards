@@ -46,14 +46,13 @@ type RewardApiResponse = {
     totalSOLDistributed: number;
   };
   tokenPrice: {
-    usd: number;
-    source?: 'jupiter' | 'raydium' | 'fallback';
+    sol: number | null;
+    usd: number | null;
+    source?: 'raydium' | null;
   };
   dex?: {
     name: string;
-    price: number | null;
-    priceUSD: number | null;
-    liquidityUSD: number | null;
+    price: number | null; // SOL per NUKE
     source: string;
     updatedAt: string;
   } | null;
@@ -77,26 +76,18 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
   const lastRunDisplay = rewards.lastRun ? new Date(rewards.lastRun).toLocaleString() : 'Never';
   const nextRunDisplay = rewards.nextRun ? new Date(rewards.nextRun).toLocaleString() : 'N/A';
 
-  // Prioritize Raydium price if available, otherwise use tokenPrice
-  let priceUSD = rewards.tokenPrice.usd;
+  // Get price in SOL from Raydium
+  let priceSOL: number | null = null;
   let priceSource = 'Raydium';
   
-  // If Raydium DEX data is available, use its price (converted to USD)
-  if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.priceUSD !== null && rewards.dex.priceUSD > 0) {
-    priceUSD = rewards.dex.priceUSD;
+  // Prioritize Raydium DEX price if available
+  if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.price !== null) {
+    priceSOL = rewards.dex.price;
     priceSource = 'Raydium';
-  } else if (rewards.tokenPrice.source === 'raydium') {
-    priceSource = 'Raydium';
-  } else if (rewards.tokenPrice.source === 'jupiter') {
-    priceSource = 'Jupiter';
-  } else {
-    priceSource = 'Default';
+  } else if (rewards.tokenPrice.sol !== null) {
+    priceSOL = rewards.tokenPrice.sol;
+    priceSource = rewards.tokenPrice.source || 'Raydium';
   }
-
-  // Get pool liquidity from Raydium if available
-  const poolLiquidity = rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.liquidityUSD 
-    ? rewards.dex.liquidityUSD 
-    : null;
 
   const messageLines = [
     '📊 Reward System Status',
@@ -106,12 +97,13 @@ async function fetchRewardsSummary(backendUrl: string): Promise<{ message: strin
     `Status: ${rewards.isRunning ? 'Running' : 'Idle'}`,
     '',
     'Statistics:',
-    `• Price (USD): ${priceUSD.toFixed(4)}`,
   ];
 
-  // Add Pool Liquidity (PL) if available from Raydium
-  if (poolLiquidity !== null) {
-    messageLines.push(`• PL: $${poolLiquidity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+  // Add price in SOL
+  if (priceSOL !== null) {
+    messageLines.push(`• Price: ${priceSOL.toFixed(8)} SOL (${priceSource})`);
+  } else {
+    messageLines.push(`• Price: N/A (${priceSource})`);
   }
 
   messageLines.push(

@@ -8,7 +8,7 @@ import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { loadKeypairFromEnv } from '../utils/loadKeypairFromEnv';
 import { isBlacklisted } from '../config/blacklist';
-import { getNUKEPriceUSD } from './priceService';
+import { getNUKEPriceSOL, getNUKEPriceUSD } from './priceService';
 import { saveHistoricalPayouts, type HistoricalPayout } from './rewardHistoryService';
 
 export interface Holder {
@@ -180,11 +180,23 @@ export function setLastRewardRun(timestamp: number): void {
 }
 
 /**
- * Calculate USD value of token holdings using real price from price service
+ * Calculate SOL value of token holdings using Raydium price
  */
-async function calculateHoldingUSD(amount: string, decimals: number, tokenPriceUSD: number): Promise<number> {
+async function calculateHoldingSOL(amount: string, decimals: number, tokenPriceSOL: number): Promise<number> {
   const tokenAmount = Number(amount) / Math.pow(10, decimals);
-  return tokenAmount * tokenPriceUSD;
+  return tokenAmount * tokenPriceSOL;
+}
+
+/**
+ * Calculate USD value of token holdings (legacy - uses SOL price with fixed conversion for eligibility)
+ * For devnet, uses a fixed SOL/USD rate for eligibility checks only
+ */
+async function calculateHoldingUSD(amount: string, decimals: number, tokenPriceSOL: number): Promise<number> {
+  const tokenAmount = Number(amount) / Math.pow(10, decimals);
+  const holdingSOL = tokenAmount * tokenPriceSOL;
+  // Use fixed SOL/USD rate for devnet eligibility (100 SOL = 1 USD for devnet)
+  const SOL_TO_USD_RATE = 100; // Devnet conversion rate for eligibility checks
+  return holdingSOL * SOL_TO_USD_RATE;
 }
 
 /**
@@ -194,14 +206,23 @@ async function calculateHoldingUSD(amount: string, decimals: number, tokenPriceU
  */
 export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.MIN_HOLDING_USD): Promise<Holder[]> {
   try {
-    // Fetch current NUKE token price
-    let tokenPriceUSD: number;
+    // Fetch current NUKE token price in SOL from Raydium
+    let tokenPriceSOL: number | null = null;
     try {
-      tokenPriceUSD = await getNUKEPriceUSD();
-      logger.info('Using NUKE token price for eligibility check', {
-        priceUSD: tokenPriceUSD,
-        minHoldingUSD,
-      });
+      const priceData = await getNUKEPriceSOL();
+      if (priceData.price !== null && priceData.source === 'raydium') {
+        tokenPriceSOL = priceData.price;
+        logger.info('Using NUKE token price (SOL) for eligibility check', {
+          priceSOL: tokenPriceSOL,
+          minHoldingUSD,
+          source: 'raydium',
+        });
+      } else {
+        logger.warn('Raydium price unavailable, skipping eligibility check', {
+          priceData,
+        });
+        return [];
+      }
     } catch (priceError) {
       logger.error('Failed to fetch token price, skipping eligibility check', {
         error: priceError instanceof Error ? priceError.message : String(priceError),
@@ -214,6 +235,10 @@ export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.M
     const eligibleHolders: Holder[] = [];
     const excludedHolders: Array<{ pubkey: string; usdValue: number }> = [];
     
+    // Convert MIN_HOLDING_USD to SOL for comparison (using fixed devnet rate)
+    const SOL_TO_USD_RATE = 100; // Devnet conversion rate
+    const minHoldingSOL = minHoldingUSD / SOL_TO_USD_RATE;
+    
     for (const holder of allHolders) {
       // Skip blacklisted addresses
       if (isBlacklisted(holder.owner)) {
@@ -223,14 +248,16 @@ export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.M
         continue;
       }
       
-      // Calculate USD value using real price
-      const holdingUSD = await calculateHoldingUSD(holder.amount, holder.decimals, tokenPriceUSD);
+      // Calculate SOL value using Raydium price
+      const holdingSOL = await calculateHoldingSOL(holder.amount, holder.decimals, tokenPriceSOL);
+      // Calculate USD value for logging/compatibility (using fixed rate)
+      const holdingUSD = holdingSOL * SOL_TO_USD_RATE;
       
-      if (holdingUSD >= minHoldingUSD) {
+      if (holdingSOL >= minHoldingSOL) {
         eligibleHolders.push({
           pubkey: holder.owner,
           balance: holder.amount,
-          usdValue: holdingUSD,
+          usdValue: holdingUSD, // Keep USD value for compatibility
         });
       } else {
         // Track excluded holders for logging
@@ -247,7 +274,9 @@ export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.M
       excluded: excludedHolders.length,
       blacklisted: allHolders.length - eligibleHolders.length - excludedHolders.length,
       minHoldingUSD,
-      tokenPriceUSD,
+      minHoldingSOL,
+      tokenPriceSOL,
+      source: 'raydium',
       excludedBelowThreshold: excludedHolders.length > 0 ? excludedHolders.slice(0, 5).map(h => ({
         pubkey: h.pubkey.substring(0, 8) + '...',
         usdValue: h.usdValue.toFixed(2),
@@ -677,16 +706,32 @@ export async function getAllHoldersWithStatus(): Promise<Array<{
 }>> {
   try {
     // Fetch all data in parallel to optimize performance
-    const [allHolders, tokenPriceUSD] = await Promise.all([
+    const [allHolders, priceData] = await Promise.all([
       getTokenHolders(),
-      getNUKEPriceUSD().catch(() => {
-        logger.warn('Failed to fetch price for holder status, using fallback');
-        return 0.01; // Fallback price
+      getNUKEPriceSOL().catch(() => {
+        logger.warn('Failed to fetch price for holder status');
+        return { price: null, source: null };
       }),
     ]);
     
+    const tokenPriceSOL = priceData.price;
+    if (tokenPriceSOL === null) {
+      logger.warn('Token price unavailable, using fallback for holder status');
+      // Return holders with zero values if price unavailable
+      return allHolders.map(holder => ({
+        pubkey: holder.owner,
+        balance: holder.amount,
+        usdValue: 0,
+        eligibilityStatus: 'excluded' as const,
+        lastReward: getLastReward(holder.owner),
+        retryCount: getRetryCount(holder.owner),
+      }));
+    }
+    
     // Calculate eligibility inline instead of calling getEligibleHolders() which fetches holders again
     const minHoldingUSD = REWARD_CONFIG.MIN_HOLDING_USD;
+    const SOL_TO_USD_RATE = 100; // Devnet conversion rate
+    const minHoldingSOL = minHoldingUSD / SOL_TO_USD_RATE;
     const eligiblePubkeys = new Set<string>();
     
     // Determine eligibility for each holder without fetching again
@@ -696,12 +741,12 @@ export async function getAllHoldersWithStatus(): Promise<Array<{
         continue;
       }
       
-      // Calculate USD value
+      // Calculate SOL value
       const tokenAmount = Number(holder.amount) / Math.pow(10, holder.decimals);
-      const usdValue = tokenAmount * tokenPriceUSD;
+      const holdingSOL = tokenAmount * tokenPriceSOL;
       
-      // Check if eligible
-      if (usdValue >= minHoldingUSD) {
+      // Check if eligible (using SOL comparison)
+      if (holdingSOL >= minHoldingSOL) {
         eligiblePubkeys.add(holder.owner);
       }
     }
@@ -720,9 +765,10 @@ export async function getAllHoldersWithStatus(): Promise<Array<{
         eligibilityStatus = 'excluded';
       }
       
-      // Calculate USD value for all holders using current price
+      // Calculate USD value for all holders (for compatibility, using fixed conversion)
       const tokenAmount = Number(holder.amount) / Math.pow(10, holder.decimals);
-      const usdValue = tokenAmount * tokenPriceUSD;
+      const holdingSOL = tokenAmount * tokenPriceSOL;
+      const usdValue = holdingSOL * SOL_TO_USD_RATE;
       
       return {
         pubkey: holder.owner,

@@ -7,7 +7,7 @@ import {
 } from '../services/rewardService';
 import { getSchedulerStatus } from '../scheduler/rewardScheduler';
 import { getTokenHolders } from '../services/solanaService';
-import { getNUKEPriceUSD, getPriceSource } from '../services/priceService';
+import { getNUKEPriceSOL, getNUKEPriceUSD, getPriceSource } from '../services/priceService';
 import { getRaydiumData } from '../services/raydiumService';
 import { isBlacklisted } from '../config/blacklist';
 import { REWARD_CONFIG } from '../config/constants';
@@ -111,7 +111,9 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     // Get all holders and eligible holders
     const allHolders = await getTokenHolders();
     const eligibleHolders = await getEligibleHolders().catch(() => []);
-    const tokenPriceUSD = await getNUKEPriceUSD().catch(() => 0.01);
+    
+    // Get NUKE price in SOL from Raydium devnet pool
+    const tokenPriceSOL = await getNUKEPriceSOL().catch(() => ({ price: null, source: null }));
 
     // Get pending payouts
     const pendingPayouts = getPendingPayouts();
@@ -131,24 +133,8 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
       filteredPending = pendingPayouts.filter(p => p.pubkey === filterPubkey);
     }
 
-    // Get Raydium data and price source
-    // tokenPriceUSD already uses the hybrid pricing model (Raydium → Jupiter → Fallback)
-    // and getPriceSource() tracks which source was used
+    // Get Raydium data
     const raydiumData = await getRaydiumData().catch(() => null);
-    const priceSource = getPriceSource(); // Tracks: 'raydium' | 'jupiter' | 'fallback'
-
-    // Calculate Raydium price in USD if available (for dex object)
-    // This uses the hybrid model: NUKE_SOL (devnet) × SOL_USD (mainnet reference)
-    let raydiumPriceUSD: number | null = null;
-    if (raydiumData && raydiumData.source === 'raydium' && raydiumData.price) {
-      // Import getRaydiumPriceUSD to get USD price using hybrid model
-      const { getRaydiumPriceUSD } = await import('../services/raydiumService');
-      raydiumPriceUSD = await getRaydiumPriceUSD().catch(() => null);
-    }
-
-    // Use tokenPriceUSD which already follows the correct priority (Raydium → Jupiter → Fallback)
-    // This ensures consistent pricing across the system
-    const displayPrice = tokenPriceUSD;
 
     // Get tax statistics
     const { TaxService } = await import('../services/taxService');
@@ -167,14 +153,13 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         totalSOLDistributed: parseFloat(totalSOLDistributed.toFixed(6)),
       },
       tokenPrice: {
-        usd: parseFloat(displayPrice.toFixed(6)),
-        source: priceSource,
+        sol: tokenPriceSOL.price !== null ? parseFloat(tokenPriceSOL.price.toFixed(8)) : null,
+        usd: null, // Not used for devnet (SOL-only pricing)
+        source: tokenPriceSOL.source || null,
       },
       dex: raydiumData && raydiumData.source === 'raydium' ? {
         name: 'raydium',
-        price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null,
-        priceUSD: raydiumPriceUSD ? parseFloat(raydiumPriceUSD.toFixed(6)) : null,
-        liquidityUSD: raydiumData.liquidityUSD ? parseFloat(raydiumData.liquidityUSD.toFixed(2)) : null,
+        price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null, // SOL per NUKE
         source: 'raydium',
         updatedAt: raydiumData.updatedAt,
       } : null,
@@ -210,14 +195,19 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
       error: error instanceof Error ? error.message : 'Unknown error',
       lastRun: null,
       nextRun: null,
-      statistics: {
-        totalHolders: 0,
-        eligibleHolders: 0,
-        excludedHolders: 0,
-        blacklistedHolders: 0,
-        pendingPayouts: 0,
-        totalSOLDistributed: 0,
-      },
+              statistics: {
+                totalHolders: 0,
+                eligibleHolders: 0,
+                excludedHolders: 0,
+                blacklistedHolders: 0,
+                pendingPayouts: 0,
+                totalSOLDistributed: 0,
+              },
+              tokenPrice: {
+                sol: null,
+                usd: null,
+                source: null,
+              },
     });
   }
 });
@@ -339,11 +329,7 @@ router.get('/raydium', async (req: Request, res: Response): Promise<void> => {
 
     const response = {
       dex: 'raydium',
-      price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null,
-      priceUSD: raydiumData.price ? (await getNUKEPriceUSD().catch(() => null)) : null,
-      liquidityUSD: raydiumData.liquidityUSD ? parseFloat(raydiumData.liquidityUSD.toFixed(2)) : null,
-      baseVaultBalance: raydiumData.baseVaultBalance.toString(),
-      quoteVaultBalance: raydiumData.quoteVaultBalance.toString(),
+      price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null, // SOL per NUKE
       source: raydiumData.source,
       updatedAt: raydiumData.updatedAt,
     };
@@ -363,7 +349,6 @@ router.get('/raydium', async (req: Request, res: Response): Promise<void> => {
       error: error instanceof Error ? error.message : 'Unknown error',
       dex: 'raydium',
       price: null,
-      liquidityUSD: null,
       source: null,
       updatedAt: new Date().toISOString(),
     });
@@ -393,8 +378,8 @@ router.get('/diagnostics', async (req: Request, res: Response): Promise<void> =>
     // Get eligible holders
     const eligibleHolders = await getEligibleHolders().catch(() => []);
     
-    // Get token price
-    const tokenPriceUSD = await getNUKEPriceUSD().catch(() => 0.01);
+    // Get token price in SOL from Raydium
+    const tokenPriceSOL = await getNUKEPriceSOL().catch(() => ({ price: null, source: null }));
     
     // Get Raydium data
     const raydiumData = await getRaydiumData().catch(() => null);
@@ -420,11 +405,11 @@ router.get('/diagnostics', async (req: Request, res: Response): Promise<void> =>
         nextRun: schedulerStatus.nextRun ? new Date(schedulerStatus.nextRun).toISOString() : null,
       },
       price: {
-        usd: tokenPriceUSD,
-        source: getPriceSource(),
-        raydium: raydiumData ? {
-          price: raydiumData.price,
-          liquidityUSD: raydiumData.liquidityUSD,
+        sol: tokenPriceSOL.price !== null ? parseFloat(tokenPriceSOL.price.toFixed(8)) : null,
+        usd: null, // Not used for devnet (SOL-only pricing)
+        source: tokenPriceSOL.source || null,
+        raydium: raydiumData && raydiumData.source === 'raydium' ? {
+          price: raydiumData.price ? parseFloat(raydiumData.price.toFixed(8)) : null, // SOL per NUKE
           source: raydiumData.source,
         } : null,
       },

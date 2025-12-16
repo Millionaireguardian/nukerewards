@@ -1,176 +1,117 @@
 import { logger } from '../utils/logger';
-import { tokenMint } from '../config/solana';
-import { getRaydiumPriceUSD } from './raydiumService';
+import { getRaydiumData } from './raydiumService';
 
-// Default fallback price if API fails (in USD per token)
-const DEFAULT_NUKE_PRICE_USD = 0.01;
+/**
+ * Price Service - Devnet Only
+ * 
+ * Fetches NUKE token price in SOL from Raydium devnet pool only.
+ * No USD conversions, no Jupiter, no fallbacks.
+ * 
+ * Returns price in SOL (WSOL per NUKE) from Raydium devnet pool.
+ */
 
 // Cache for price to avoid excessive API calls
-let cachedPrice: number | null = null;
-let priceCacheTimestamp: number = 0;
-let priceSource: 'jupiter' | 'raydium' | 'fallback' = 'fallback';
+interface PriceCache {
+  price: number | null; // SOL per NUKE
+  source: 'raydium' | null;
+  timestamp: number;
+}
+
+let cachedPrice: PriceCache | null = null;
 const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Fetch NUKE token price in USD from Jupiter API
- * Falls back to default price if API fails
- */
-async function fetchPriceFromJupiter(): Promise<number | null> {
-  try {
-    // Jupiter price API endpoint
-    // For devnet tokens, we may need to use a different approach
-    const jupiterPriceUrl = `https://price.jup.ag/v4/price?ids=${tokenMint.toBase58()}`;
-    
-    const response = await fetch(jupiterPriceUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Jupiter API returned status ${response.status}`);
-    }
-
-    const data = await response.json() as {
-      data?: {
-        [mint: string]: {
-          price?: number;
-        };
-      };
-    };
-    
-    // Jupiter API response structure: { data: { [mint]: { price: number } } }
-    if (data.data && data.data[tokenMint.toBase58()]) {
-      const price = data.data[tokenMint.toBase58()].price;
-      if (typeof price === 'number' && price > 0) {
-        return price;
-      }
-    }
-
-    return null;
-  } catch (error) {
-    logger.debug('Failed to fetch price from Jupiter API', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-}
-
-/**
- * Fetch NUKE token price using alternative method (Helius or direct lookup)
- * This is a placeholder for devnet tokens that may not be on Jupiter
- */
-async function fetchPriceAlternative(): Promise<number | null> {
-  try {
-    // For devnet tokens, we can try Helius token metadata API
-    // Or use a simple fallback mechanism
-    // This is a placeholder - implement based on available APIs
-    
-    // For now, return null to use fallback
-    return null;
-  } catch (error) {
-    logger.debug('Failed to fetch price from alternative source', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-}
-
-/**
- * Get NUKE token price in USD
+ * Get NUKE token price in SOL from Raydium devnet pool
  * 
- * Pricing Model (Hybrid for Devnet):
- * - Primary: Raydium DEX (devnet pool) - fetches NUKE/SOL ratio
- * - Conversion: Uses mainnet SOL/USD reference price (Jupiter/CoinGecko)
- * - Formula: NUKE_USD = (NUKE_SOL from devnet) × (SOL_USD from mainnet)
- * 
- * Fallback Order:
- * 1. Raydium (primary) - hybrid model with devnet pool + mainnet SOL/USD
- * 2. Jupiter (secondary) - direct USD price if available
- * 3. Static default (last fallback) - DEFAULT_NUKE_PRICE_USD
- * 
- * This hybrid model is intentional and correct for devnet tokens.
- * The same logic will work seamlessly on mainnet without code changes.
+ * Returns: { price: number, source: "raydium" }
+ * - price: WSOL per NUKE (from Raydium devnet pool)
+ * - source: Always "raydium" for devnet
  * 
  * Uses cached price if available and fresh (5 minute TTL)
  */
-export async function getNUKEPriceUSD(): Promise<number> {
+export async function getNUKEPriceSOL(): Promise<{ price: number | null; source: 'raydium' | null }> {
   try {
     // Check cache first
     const now = Date.now();
-    if (cachedPrice !== null && (now - priceCacheTimestamp) < PRICE_CACHE_TTL) {
-      logger.debug('Using cached NUKE price', {
-        price: cachedPrice,
-        source: priceSource,
-        cachedAt: new Date(priceCacheTimestamp).toISOString(),
+    if (cachedPrice && (now - cachedPrice.timestamp) < PRICE_CACHE_TTL) {
+      logger.debug('Using cached NUKE price (SOL)', {
+        price: cachedPrice.price,
+        source: cachedPrice.source,
+        cachedAt: new Date(cachedPrice.timestamp).toISOString(),
       });
-      return cachedPrice;
+      return {
+        price: cachedPrice.price,
+        source: cachedPrice.source,
+      };
     }
 
-    // Priority 1: Try Raydium DEX (primary source)
-    // Uses hybrid model: NUKE_SOL (devnet) × SOL_USD (mainnet reference)
-    let price = await getRaydiumPriceUSD();
-    let source: 'jupiter' | 'raydium' | 'fallback' = 'raydium';
+    // Fetch from Raydium devnet pool
+    const raydiumData = await getRaydiumData();
     
-    // Priority 2: If Raydium fails, try Jupiter as fallback
-    if (price === null) {
-      logger.debug('Raydium price unavailable, trying Jupiter');
-      price = await fetchPriceFromJupiter();
-      if (price !== null) {
-        source = 'jupiter';
-      }
-    }
-    
-    // Priority 3: If both fail, try alternative source (legacy)
-    if (price === null) {
-      price = await fetchPriceAlternative();
-      if (price !== null) {
-        source = 'jupiter'; // Assume alternative is Jupiter-like
-      }
-    }
+    let price: number | null = null;
+    let source: 'raydium' | null = null;
 
-    // Priority 4: If all APIs fail, use static default fallback
-    if (price === null) {
-      logger.warn('All price APIs failed, using default fallback price', {
-        defaultPrice: DEFAULT_NUKE_PRICE_USD,
-        tokenMint: tokenMint.toBase58(),
+    if (raydiumData && raydiumData.source === 'raydium' && raydiumData.price !== null) {
+      price = raydiumData.price; // This is already WSOL per NUKE
+      source = 'raydium';
+      
+      logger.info('NUKE token price fetched from Raydium (SOL)', {
+        priceSOL: price,
+        source: 'raydium',
+        description: `${price} WSOL per NUKE`,
       });
-      price = DEFAULT_NUKE_PRICE_USD;
-      source = 'fallback';
+    } else {
+      logger.warn('Raydium price unavailable', {
+        raydiumSource: raydiumData?.source || 'null',
+        raydiumPrice: raydiumData?.price || 'null',
+      });
+      source = null;
     }
 
     // Update cache
-    cachedPrice = price;
-    priceCacheTimestamp = now;
-    priceSource = source;
-
-    logger.info('NUKE token price fetched', {
-      priceUSD: price,
+    cachedPrice = {
+      price,
       source,
-      tokenMint: tokenMint.toBase58(),
-    });
+      timestamp: now,
+    };
 
-    return price;
+    return {
+      price,
+      source,
+    };
   } catch (error) {
-    logger.error('Error fetching NUKE price, using fallback', {
+    logger.error('Error fetching NUKE price from Raydium', {
       error: error instanceof Error ? error.message : String(error),
-      fallbackPrice: DEFAULT_NUKE_PRICE_USD,
     });
     
-    // Return fallback price
-    cachedPrice = DEFAULT_NUKE_PRICE_USD;
-    priceCacheTimestamp = Date.now();
-    priceSource = 'fallback';
-    return DEFAULT_NUKE_PRICE_USD;
+    // Return null on error (no fallback)
+    cachedPrice = {
+      price: null,
+      source: null,
+      timestamp: Date.now(),
+    };
+    
+    return {
+      price: null,
+      source: null,
+    };
   }
 }
 
 /**
- * Get price source (jupiter, raydium, or fallback)
+ * Get NUKE token price in USD (legacy function for compatibility)
+ * Returns null for devnet as we only use SOL prices
  */
-export function getPriceSource(): 'jupiter' | 'raydium' | 'fallback' {
-  return priceSource;
+export async function getNUKEPriceUSD(): Promise<number> {
+  logger.debug('getNUKEPriceUSD called - returning null for devnet (SOL-only pricing)');
+  return 0; // Return 0 for devnet
+}
+
+/**
+ * Get price source (always 'raydium' or null for devnet)
+ */
+export function getPriceSource(): 'raydium' | null {
+  return cachedPrice?.source || null;
 }
 
 /**
@@ -178,8 +119,5 @@ export function getPriceSource(): 'jupiter' | 'raydium' | 'fallback' {
  */
 export function clearPriceCache(): void {
   cachedPrice = null;
-  priceCacheTimestamp = 0;
-  priceSource = 'fallback';
   logger.debug('Price cache cleared');
 }
-
