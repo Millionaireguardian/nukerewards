@@ -4,6 +4,7 @@ import {
   Transaction,
   SystemProgram,
   sendAndConfirmTransaction,
+  getParsedTransaction,
 } from '@solana/web3.js';
 import {
   TOKEN_2022_PROGRAM_ID,
@@ -382,7 +383,15 @@ export class TaxService {
         
         logger.info('Scanning ALL token accounts for withheld fees', {
           totalAccounts: allTokenAccounts.length,
+          note: 'This includes ALL accounts (zero balance and non-zero balance)',
         });
+        
+        // Log account details for debugging
+        if (allTokenAccounts.length <= 20) {
+          logger.debug('Token account addresses being scanned', {
+            accounts: allTokenAccounts.map(({ pubkey }) => pubkey.toBase58()),
+          });
+        }
         
         // Check ALL accounts for withheld fees (not just first 50)
         for (const { pubkey, account } of allTokenAccounts) {
@@ -460,6 +469,20 @@ export class TaxService {
           estimatedFromScan: totalWithheldInAccounts.toString(),
         });
         
+        // Get mint withheld amount BEFORE harvest to compare
+        const mintAccountBeforeHarvest = await connection.getAccountInfo(tokenMint);
+        if (!mintAccountBeforeHarvest) {
+          throw new Error('Mint account not found');
+        }
+        const parsedMintBeforeHarvest = unpackMint(tokenMint, mintAccountBeforeHarvest, TOKEN_2022_PROGRAM_ID);
+        const transferFeeConfigBeforeHarvest = getTransferFeeConfig(parsedMintBeforeHarvest);
+        const mintWithheldBeforeHarvest = transferFeeConfigBeforeHarvest?.withheldAmount || 0n;
+        
+        logger.info('Mint withheld amount BEFORE harvest', {
+          mintWithheldAmount: mintWithheldBeforeHarvest.toString(),
+          mintWithheldAmountHuman: (Number(mintWithheldBeforeHarvest) / Math.pow(10, decimals)).toFixed(6),
+        });
+        
         harvestSignature = await harvestWithheldTokensToMint(
           connection,
           withdrawWallet,
@@ -468,9 +491,69 @@ export class TaxService {
           { commitment: 'confirmed' }
         );
 
-        logger.info('Harvest completed', {
+        // Wait a moment for the transaction to fully settle, then verify
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Try to get transaction details to see what happened
+        try {
+          const txDetails = await getParsedTransaction(connection, harvestSignature, {
+            commitment: 'confirmed',
+            maxSupportedTransactionVersion: 0,
+          });
+          
+          if (txDetails && txDetails.meta) {
+            logger.debug('Harvest transaction details', {
+              signature: harvestSignature,
+              fee: txDetails.meta.fee,
+              err: txDetails.meta.err,
+              logMessages: txDetails.meta.logMessages?.slice(0, 5), // First 5 log messages
+            });
+          }
+        } catch (txError) {
+          logger.debug('Could not fetch harvest transaction details', {
+            error: txError instanceof Error ? txError.message : String(txError),
+          });
+        }
+        
+        // Get mint withheld amount AFTER harvest to see if anything was harvested
+        const mintAccountAfterHarvestCheck = await connection.getAccountInfo(tokenMint, 'confirmed');
+        if (!mintAccountAfterHarvestCheck) {
+          throw new Error('Mint account not found after harvest');
+        }
+        const parsedMintAfterHarvestCheck = unpackMint(tokenMint, mintAccountAfterHarvestCheck, TOKEN_2022_PROGRAM_ID);
+        const transferFeeConfigAfterHarvestCheck = getTransferFeeConfig(parsedMintAfterHarvestCheck);
+        const mintWithheldAfterHarvestCheck = transferFeeConfigAfterHarvestCheck?.withheldAmount || 0n;
+        const harvestedAmount = mintWithheldAfterHarvestCheck - mintWithheldBeforeHarvest;
+        
+        logger.info('Harvest completed - verifying results', {
           signature: harvestSignature,
+          mintWithheldBefore: mintWithheldBeforeHarvest.toString(),
+          mintWithheldAfter: mintWithheldAfterHarvestCheck.toString(),
+          harvestedAmount: harvestedAmount.toString(),
+          harvestedAmountHuman: (Number(harvestedAmount) / Math.pow(10, decimals)).toFixed(6),
         });
+        
+        if (harvestedAmount > 0n) {
+          logger.info('✅ Harvest successfully moved tokens to mint', {
+            amount: harvestedAmount.toString(),
+            amountHuman: (Number(harvestedAmount) / Math.pow(10, decimals)).toFixed(6),
+          });
+        } else if (harvestedAmount < 0n) {
+          logger.warn('⚠️  Mint withheld amount decreased after harvest (unexpected)', {
+            delta: harvestedAmount.toString(),
+            possibleReason: 'Tokens may have been withdrawn by another process',
+          });
+        } else {
+          logger.info('ℹ️  Harvest found no new tokens to move (mint withheld unchanged)', {
+            reason: 'No fees in token accounts or fees already in mint',
+            diagnostic: {
+              totalAccountsScanned: 'See pre-harvest check logs',
+              accountsWithWithheld: 'See pre-harvest check logs',
+              mintWithheldBefore: mintWithheldBeforeHarvest.toString(),
+              mintWithheldAfter: mintWithheldAfterHarvestCheck.toString(),
+            },
+          });
+        }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         // If harvest fails with "no withheld tokens", that's okay - just log it
