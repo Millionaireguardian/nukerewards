@@ -358,7 +358,52 @@ export class TaxService {
         throw new Error('No valid wallet found for tax withdrawal');
       }
 
-      // Step 3: Harvest withheld tokens to mint (collects from all token accounts)
+      // Step 3: Check token accounts for withheld fees before harvesting
+      // This helps diagnose if tax is being collected
+      try {
+        const { getTokenHolders } = await import('./solanaService');
+        const holders = await getTokenHolders();
+        const { getTransferFeeAmount, unpackAccount } = await import('@solana/spl-token');
+        
+        let totalWithheldInAccounts = 0n;
+        let accountsWithWithheld = 0;
+        
+        // Check first 20 token accounts for withheld fees (to avoid too many RPC calls)
+        const accountsToCheck = holders.slice(0, 20);
+        for (const holder of accountsToCheck) {
+          try {
+            const accountInfo = await connection.getAccountInfo(new PublicKey(holder.address));
+            if (accountInfo) {
+              const parsedAccount = unpackAccount(new PublicKey(holder.address), accountInfo, TOKEN_2022_PROGRAM_ID);
+              const transferFeeAmount = getTransferFeeAmount(parsedAccount);
+              if (transferFeeAmount && transferFeeAmount.withheldAmount > 0n) {
+                totalWithheldInAccounts += transferFeeAmount.withheldAmount;
+                accountsWithWithheld++;
+                logger.debug('Token account has withheld fees', {
+                  account: holder.address,
+                  withheldAmount: transferFeeAmount.withheldAmount.toString(),
+                  withheldAmountHuman: (Number(transferFeeAmount.withheldAmount) / Math.pow(10, decimals)).toFixed(6),
+                });
+              }
+            }
+          } catch (error) {
+            // Skip accounts that can't be parsed
+          }
+        }
+        
+        logger.info('Pre-harvest diagnostic: checked token accounts for withheld fees', {
+          accountsChecked: accountsToCheck.length,
+          accountsWithWithheld,
+          totalWithheldInAccounts: totalWithheldInAccounts.toString(),
+          totalWithheldInAccountsHuman: (Number(totalWithheldInAccounts) / Math.pow(10, decimals)).toFixed(6),
+        });
+      } catch (error) {
+        logger.debug('Failed to check token accounts for withheld fees (non-critical)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      // Step 4: Harvest withheld tokens to mint (collects from all token accounts)
       // This moves withheld fees from individual accounts to the mint
       try {
         const emptySources: PublicKey[] = []; // Explicitly typed empty array for sources
