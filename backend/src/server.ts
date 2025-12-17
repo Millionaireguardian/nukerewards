@@ -114,9 +114,15 @@ export function startServer(app: Express): void {
     // Start the reward scheduler once the HTTP server is up.
     // This runs the periodic harvesting + distribution loop used by the dashboard and Telegram bot.
     try {
+      console.log('Starting reward scheduler...');
       startRewardScheduler();
+      console.log('Reward scheduler started successfully');
     } catch (err) {
       console.error('Failed to start reward scheduler:', err);
+      if (err instanceof Error) {
+        console.error('Error details:', err.message);
+        console.error('Stack:', err.stack);
+      }
     }
   });
 

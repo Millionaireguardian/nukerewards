@@ -60,11 +60,12 @@ async function processRewards(): Promise<void> {
           swapSignature: taxResult.swapSignature,
         });
       } else {
-        logger.debug('No withheld tax to process');
+        logger.info('No withheld tax to process - this is normal if no trades have occurred or no tax was collected');
       }
     } catch (taxError) {
       logger.error('Error processing withheld tax', {
         error: taxError instanceof Error ? taxError.message : String(taxError),
+        stack: taxError instanceof Error ? taxError.stack : undefined,
       });
       // Don't throw - allow scheduler to continue
     }

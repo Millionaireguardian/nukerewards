@@ -259,7 +259,10 @@ export class TaxService {
    * - TREASURY_WALLET_PRIVATE_KEY_JSON: JSON array of 64 numbers (optional, treasury can be receive-only)
    */
   static async processWithheldTax(): Promise<TaxDistributionResult | null> {
-    logger.info('Processing withheld tax from Token-2022 transfers');
+    logger.info('Processing withheld tax from Token-2022 transfers', {
+      timestamp: new Date().toISOString(),
+      mint: tokenMint.toBase58(),
+    });
 
     try {
       // Step 1: Get token mint info and check withdraw authority
@@ -280,27 +283,51 @@ export class TaxService {
       if (!transferFeeConfig || !transferFeeConfig.withdrawWithheldAuthority) {
         logger.error('No withdraw withheld authority set on mint. Tax harvesting will not work.');
         logger.error('Please update the withdraw withheld authority to the reward wallet.');
+        logger.error('Run setWithdrawAuthority.ts script to fix this.');
         return null;
       }
       
       const withdrawAuthority = transferFeeConfig.withdrawWithheldAuthority;
-      logger.info('Withdraw withheld authority', {
+      logger.info('Withdraw withheld authority check', {
         authority: withdrawAuthority.toBase58(),
+        mint: tokenMint.toBase58(),
       });
       
       // Step 2: Determine which wallet to use based on authority
       // Try reward wallet first, then admin wallet as fallback
       let withdrawWallet: Keypair | null = null;
-      const rewardWallet = getRewardWallet();
-      const rewardWalletAddress = getRewardWalletAddress();
+      let rewardWallet: Keypair;
+      let rewardWalletAddress: PublicKey;
+      
+      try {
+        rewardWallet = getRewardWallet();
+        rewardWalletAddress = getRewardWalletAddress();
+        logger.info('Reward wallet loaded', {
+          rewardWalletAddress: rewardWalletAddress.toBase58(),
+        });
+      } catch (error) {
+        logger.error('Failed to load reward wallet', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
       
       if (withdrawAuthority.equals(rewardWalletAddress)) {
         withdrawWallet = rewardWallet;
-        logger.info('Using reward wallet for tax withdrawal');
+        logger.info('Using reward wallet for tax withdrawal', {
+          authority: withdrawAuthority.toBase58(),
+          rewardWallet: rewardWalletAddress.toBase58(),
+        });
       } else {
         // Try admin wallet as fallback
         try {
           const adminWallet = getAdminWallet();
+          logger.info('Checking admin wallet as fallback', {
+            authority: withdrawAuthority.toBase58(),
+            adminWallet: adminWallet.publicKey.toBase58(),
+            rewardWallet: rewardWalletAddress.toBase58(),
+          });
+          
           if (withdrawAuthority.equals(adminWallet.publicKey)) {
             withdrawWallet = adminWallet;
             logger.info('Using admin wallet for tax withdrawal (reward wallet is not the authority)');
@@ -310,6 +337,7 @@ export class TaxService {
               rewardWallet: rewardWalletAddress.toBase58(),
               adminWallet: adminWallet.publicKey.toBase58(),
             });
+            logger.error('ACTION REQUIRED: Update withdraw authority on mint to match reward wallet');
             return null;
           }
         } catch (error) {
@@ -321,6 +349,7 @@ export class TaxService {
       }
       
       if (!withdrawWallet) {
+        logger.error('No valid wallet found for tax withdrawal');
         throw new Error('No valid wallet found for tax withdrawal');
       }
 
@@ -441,9 +470,17 @@ export class TaxService {
       }
 
       if (withdrawnAmount === BigInt(0)) {
-        logger.info('No withheld tokens were withdrawn (may be none available)');
+        logger.info('No withheld tokens were withdrawn', {
+          reason: 'No tax collected or already withdrawn',
+          withdrawnAmount: withdrawnAmount.toString(),
+        });
         return null;
       }
+      
+      logger.info('Tax withdrawal successful', {
+        withdrawnAmount: withdrawnAmount.toString(),
+        signature: withdrawSignature,
+      });
 
       const totalTax = withdrawnAmount;
 
