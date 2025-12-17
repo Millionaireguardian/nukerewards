@@ -281,8 +281,8 @@ router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
     const duration = Date.now() - startTime;
     logger.info('Dashboard API: GET /dashboard/payouts completed', {
       duration: `${duration}ms`,
-      total: filteredPayouts.length,
-      returned: limitedPayouts.length,
+      total: response.total,
+      returned: response.payouts.length,
     });
 
     res.status(200).json(response);

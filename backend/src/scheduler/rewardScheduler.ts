@@ -87,7 +87,6 @@ async function processRewards(): Promise<void> {
     let totalHoldersCount = 0;
     let eligibleHoldersCount = 0;
     let tokenPriceUSD = 0.01; // Fallback
-    let totalSolDistributed = 0;
 
     try {
       const allHolders = await getTokenHolders();
@@ -120,19 +119,21 @@ async function processRewards(): Promise<void> {
       });
     }
 
+    // Get tax stats for history and logging
+    const taxStats = TaxService.getTaxStatistics();
+    const lastDistribution = taxStats.lastTaxDistribution 
+      ? new Date(taxStats.lastTaxDistribution).getTime()
+      : null;
+    
+    // Calculate total SOL distributed (only if distribution happened in this cycle)
+    let totalSolDistributed = 0;
+    if (lastDistribution && (now - lastDistribution) < 60000) {
+      totalSolDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9; // Convert lamports to SOL
+    }
+
     // Save reward cycle to history
     try {
       const cycleId = new Date(now).toISOString();
-      // Get tax stats for this cycle
-      const taxStats = TaxService.getTaxStatistics();
-      const lastDistribution = taxStats.lastTaxDistribution 
-        ? new Date(taxStats.lastTaxDistribution).getTime()
-        : null;
-      
-      // Only save if distribution happened in this cycle (within last minute)
-      if (lastDistribution && (now - lastDistribution) < 60000) {
-        totalSolDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9; // Convert lamports to SOL
-      }
       
       const cycle: RewardCycle = {
         id: cycleId,
@@ -154,10 +155,6 @@ async function processRewards(): Promise<void> {
       });
       // Don't throw - allow scheduler to continue
     }
-
-    // Get tax result for logging
-    const taxStats = TaxService.getTaxStatistics();
-    const totalSolDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9;
 
     logger.info('Reward distribution run completed', {
       startTime: new Date(startTime).toISOString(),
