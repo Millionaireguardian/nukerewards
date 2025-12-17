@@ -252,61 +252,29 @@ router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
       timestamp: new Date().toISOString(),
     });
 
-    // Get pending payouts
-    let payouts = getPendingPayouts();
-
-    // Enrich payouts with status
-    // Note: Items in pendingPayouts are either pending or failed
-    // Successful payouts are removed from pendingPayouts after execution
-    const enrichedPayouts = payouts.map(payout => {
-      const lastReward = getLastReward(payout.pubkey);
-      const retryCount = payout.retryCount;
-      
-      // Determine status:
-      // - failed: retryCount >= MAX_RETRIES (max retries exceeded)
-      // - pending: retryCount < MAX_RETRIES (still being retried)
-      let status: 'pending' | 'success' | 'failed';
-      if (retryCount >= REWARD_CONFIG.MAX_RETRIES) {
-        status = 'failed';
-      } else {
-        status = 'pending';
-      }
-
-      return {
-        pubkey: payout.pubkey,
-        rewardSOL: parseFloat(payout.rewardSOL.toFixed(6)),
-        queuedAt: new Date(payout.queuedAt).toISOString(),
-        retryCount: payout.retryCount,
-        status,
-        lastReward: lastReward ? new Date(lastReward).toISOString() : null,
-      };
-    });
-
-    // Apply filters
-    let filteredPayouts = enrichedPayouts;
-    if (filterPubkey) {
-      filteredPayouts = filteredPayouts.filter(p => p.pubkey === filterPubkey);
-    }
-    if (filterStatus) {
-      filteredPayouts = filteredPayouts.filter(p => p.status === filterStatus);
-    }
-
-    // Sort by queuedAt (newest first)
-    filteredPayouts.sort((a, b) => new Date(b.queuedAt).getTime() - new Date(a.queuedAt).getTime());
-
-    // Apply limit
-    const limitedPayouts = filteredPayouts.slice(0, limit);
+    // Get historical payouts from tax distributions (payouts are now immediate, no pending queue)
+    const { TaxService } = await import('../services/taxService');
+    const taxStats = TaxService.getTaxStatistics();
+    
+    // Payouts are now immediate via tax distribution, so return empty for now
+    // Historical payouts can be retrieved from tax distributions if needed
+    const payouts: Array<{
+      pubkey: string;
+      rewardSOL: number;
+      queuedAt: string;
+      retryCount: number;
+      status: 'pending' | 'success' | 'failed';
+      lastReward: string | null;
+    }> = [];
 
     const response = {
-      total: filteredPayouts.length,
+      total: 0,
       limit,
-      payouts: limitedPayouts,
+      payouts: [],
       summary: {
-        pending: filteredPayouts.filter(p => p.status === 'pending').length,
-        failed: filteredPayouts.filter(p => p.status === 'failed').length,
-        totalSOL: parseFloat(
-          filteredPayouts.reduce((sum, p) => sum + p.rewardSOL, 0).toFixed(6)
-        ),
+        pending: 0,
+        failed: 0,
+        totalSOL: parseFloat(taxStats.totalSolDistributed || '0') / 1e9, // Convert lamports to SOL
       },
     };
 
@@ -390,8 +358,8 @@ router.get('/diagnostics', async (req: Request, res: Response): Promise<void> =>
     // Get scheduler status
     const schedulerStatus = getSchedulerStatus();
     
-    // Get pending payouts
-    const pendingPayouts = getPendingPayouts();
+    // Payouts are now immediate via tax distribution (no pending queue)
+    const pendingPayouts: any[] = [];
     
     // Get eligible holders
     const eligibleHolders = await getEligibleHolders().catch(() => []);

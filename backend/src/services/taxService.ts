@@ -617,7 +617,7 @@ export class TaxService {
         totalTax,
         treasurySignature,
         swapSignature: swapResult.txSignature,
-        distributionResult,
+        distributionResult: distributionResult || undefined,
       };
     } catch (error) {
       logger.error('Error processing withheld tax', {
@@ -765,7 +765,8 @@ export class TaxService {
             { commitment: 'confirmed', maxRetries: 3 }
           );
 
-          result.rewardSignature = rewardSignature;
+          // Legacy function - rewardSignature not used in new model
+          // result.rewardSignature = rewardSignature;
 
           logger.info('Tax sent to reward wallet', {
             signature: rewardSignature,
@@ -858,7 +859,7 @@ export class TaxService {
         rewardAmount: rewardAmount.toString(),
         treasuryAmount: treasuryAmount.toString(),
         fromAddress: from.toBase58(),
-        rewardSignature: result.rewardSignature,
+        rewardSignature: undefined, // Not used in new model
         treasurySignature: result.treasurySignature,
       });
 
@@ -873,7 +874,6 @@ export class TaxService {
         totalTax: totalTax.toString(),
         rewardAmount: rewardAmount.toString(),
         treasuryAmount: treasuryAmount.toString(),
-        rewardSignature: result.rewardSignature,
         treasurySignature: result.treasurySignature,
         totalTaxCollected: taxState.totalTaxCollected,
         totalRewardAmount: taxState.totalRewardAmount,

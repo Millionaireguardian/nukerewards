@@ -155,13 +155,16 @@ async function processRewards(): Promise<void> {
       // Don't throw - allow scheduler to continue
     }
 
+    // Get tax result for logging
+    const taxStats = TaxService.getTaxStatistics();
+    const totalSolDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9;
+
     logger.info('Reward distribution run completed', {
       startTime: new Date(startTime).toISOString(),
       endTime: new Date(endTime).toISOString(),
       duration: `${duration}ms`,
-      eligibleHolders: eligibleHolders.length,
-      rewardsComputed: rewards.length,
-      totalRewardSOL: totalRewardSOL.toFixed(6),
+      eligibleHolders: eligibleHoldersCount,
+      totalSolDistributed: totalSolDistributed.toFixed(6),
     });
 
     // Generate automated export file

@@ -118,10 +118,9 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
     const poolIdString = poolId.toBase58();
     const apiUrl = `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolIdString}`;
     
-    logger.info('Fetching NUKE price from Raydium Devnet API', {
+    logger.debug('Fetching NUKE price from Raydium Devnet API', {
       poolId: poolIdString,
       tokenMint: tokenMint.toBase58(),
-      apiUrl,
     });
 
     // Step 2: Fetch pool info from Raydium Devnet API
@@ -262,16 +261,9 @@ export async function getNUKEPriceSOL(): Promise<{ price: number | null; source:
 
     // Step 5: Validate and cache price
     if (price !== null && price > 0 && isFinite(price)) {
-      logger.info('NUKE token price fetched from Raydium (SOL)', {
+      logger.debug('NUKE token price fetched from Raydium (SOL)', {
         price,
-        priceDescription: `${price} SOL per NUKE`,
         poolId: poolIdString,
-        poolBaseMint: pool.baseMint,
-        poolQuoteMint: pool.quoteMint,
-        tokenMint: tokenMint.toBase58(),
-        baseTokenTotal: pool.baseTokenTotal,
-        quoteTokenTotal: pool.quoteTokenTotal,
-        priceNative: pool.priceNative,
       });
 
       cachedPrice = {

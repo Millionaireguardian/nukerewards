@@ -212,7 +212,7 @@ export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.M
       const priceData = await getNUKEPriceSOL();
       if (priceData.price !== null && priceData.source === 'raydium') {
         tokenPriceSOL = priceData.price;
-        logger.info('Using NUKE token price (SOL) for eligibility check', {
+        logger.debug('Using NUKE token price (SOL) for eligibility check', {
           priceSOL: tokenPriceSOL,
           minHoldingUSD,
           source: 'raydium',
@@ -268,7 +268,7 @@ export async function getEligibleHolders(minHoldingUSD: number = REWARD_CONFIG.M
       }
     }
     
-    logger.info('Filtered eligible holders', {
+    logger.debug('Filtered eligible holders', {
       total: allHolders.length,
       eligible: eligibleHolders.length,
       excluded: excludedHolders.length,
