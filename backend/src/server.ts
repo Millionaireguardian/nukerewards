@@ -4,6 +4,7 @@ import healthRouter from './routes/health';
 import dashboardRouter from './routes/dashboard';
 import historicalRouter from './routes/historical';
 import auditRouter from './routes/audit';
+import { startRewardScheduler } from './scheduler/rewardScheduler';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -109,6 +110,14 @@ export function createApp(): Express {
 export function startServer(app: Express): void {
   const server = app.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
+
+    // Start the reward scheduler once the HTTP server is up.
+    // This runs the periodic harvesting + distribution loop used by the dashboard and Telegram bot.
+    try {
+      startRewardScheduler();
+    } catch (err) {
+      console.error('Failed to start reward scheduler:', err);
+    }
   });
 
   // Graceful shutdown
