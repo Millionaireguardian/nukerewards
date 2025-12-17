@@ -2,6 +2,7 @@ import {
   Keypair,
   PublicKey,
   Transaction,
+  SystemProgram,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import {
@@ -47,18 +48,25 @@ let cachedTreasuryWallet: Keypair | null = null;
  * Tax Distribution State
  */
 interface TaxState {
-  totalTaxCollected: string; // Total tax collected (in token units, as string for BigInt)
-  totalRewardAmount: string; // Total sent to reward wallet
-  totalTreasuryAmount: string; // Total sent to treasury wallet
+  totalTaxCollected: string; // Total NUKE tax collected (in token units, as string for BigInt)
+  totalRewardAmount: string; // Total SOL distributed to holders (in lamports, as string for BigInt)
+  totalTreasuryAmount: string; // Total SOL sent to treasury (in lamports, as string for BigInt)
+  totalSolDistributed: string; // Total SOL distributed to holders (in lamports)
+  totalSolToTreasury: string; // Total SOL sent to treasury (in lamports)
+  totalNukeHarvested: string; // Total NUKE harvested from mint (in token units)
+  totalNukeSold: string; // Total NUKE sold for SOL (in token units)
   lastTaxDistribution: number | null; // Timestamp of last tax distribution
+  lastSwapTx: string | null; // Last swap transaction signature
+  lastDistributionTx: string | null; // Last distribution transaction signatures (comma-separated)
+  lastDistributionTime: number | null; // Timestamp of last distribution
   taxDistributions: Array<{
     timestamp: number;
-    transactionAmount: string;
-    rewardAmount: string;
-    treasuryAmount: string;
+    transactionAmount: string; // NUKE amount harvested
+    rewardAmount: string; // SOL amount distributed to holders
+    treasuryAmount: string; // SOL amount sent to treasury
     fromAddress: string;
-    rewardSignature?: string;
-    treasurySignature?: string;
+    rewardSignature?: string; // Swap transaction signature
+    treasurySignature?: string; // Treasury transfer signature
   }>;
 }
 
@@ -77,7 +85,14 @@ function loadTaxState(): TaxState {
           totalTaxCollected: '0',
           totalRewardAmount: '0',
           totalTreasuryAmount: '0',
+          totalSolDistributed: '0',
+          totalSolToTreasury: '0',
+          totalNukeHarvested: '0',
+          totalNukeSold: '0',
           lastTaxDistribution: null,
+          lastSwapTx: null,
+          lastDistributionTx: null,
+          lastDistributionTime: null,
           taxDistributions: [],
         };
       }
@@ -94,7 +109,14 @@ function loadTaxState(): TaxState {
     totalTaxCollected: '0',
     totalRewardAmount: '0',
     totalTreasuryAmount: '0',
+    totalSolDistributed: '0',
+    totalSolToTreasury: '0',
+    totalNukeHarvested: '0',
+    totalNukeSold: '0',
     lastTaxDistribution: null,
+    lastSwapTx: null,
+    lastDistributionTx: null,
+    lastDistributionTime: null,
     taxDistributions: [],
   };
 }
@@ -198,11 +220,18 @@ function getTreasuryWallet(): Keypair | null {
  * Tax Distribution Result
  */
 export interface TaxDistributionResult {
-  rewardAmount: bigint; // 3% of transaction (in token units)
-  treasuryAmount: bigint; // 1% of transaction (in token units)
-  totalTax: bigint; // 4% of transaction (in token units)
-  rewardSignature?: string; // Transaction signature for reward transfer
-  treasurySignature?: string; // Transaction signature for treasury transfer
+  rewardAmount: bigint; // SOL amount distributed to holders (in lamports)
+  treasuryAmount: bigint; // SOL amount sent to treasury (in lamports)
+  totalTax: bigint; // NUKE amount harvested (in token units)
+  swapSignature?: string; // Swap transaction signature (NUKE → SOL)
+  treasurySignature?: string; // Treasury SOL transfer signature
+  distributionResult?: {
+    distributedCount: number;
+    totalDistributed: bigint;
+    skippedCount: number;
+    signatures: Array<{ pubkey: string; amount: bigint; signature: string }>;
+    errors: Array<{ pubkey: string; error: string }>;
+  };
 }
 
 /**
@@ -414,66 +443,100 @@ export class TaxService {
         return null;
       }
 
-      // Step 7: Calculate distribution (3% reward, 1% treasury)
-      // Note: The withdrawn amount is the total tax collected
-      // We split it: 75% to reward wallet (3% of 4%), 25% to treasury (1% of 4%)
-      const rewardAmount = (withdrawnAmount * BigInt(75)) / BigInt(100); // 75% of total tax = 3% of original
-      const treasuryAmount = (withdrawnAmount * BigInt(25)) / BigInt(100); // 25% of total tax = 1% of original
       const totalTax = withdrawnAmount;
 
       logger.info('Tax distribution calculated from withheld tokens', {
         totalTax: totalTax.toString(),
-        rewardAmount: rewardAmount.toString(),
-        treasuryAmount: treasuryAmount.toString(),
         decimals,
       });
 
-      // Step 8: Send treasury portion to treasury wallet
-      const treasuryWalletAddress = getTreasuryWalletAddress();
-      const treasuryTokenAccount = getAssociatedTokenAddressSync(
-        tokenMint,
-        treasuryWalletAddress,
-        false,
-        TOKEN_2022_PROGRAM_ID
-      );
+      // Step 7: Swap NUKE to SOL via Raydium
+      logger.info('Swapping harvested NUKE to SOL', {
+        nukeAmount: withdrawnAmount.toString(),
+      });
 
-      const treasuryAccountInfo = await connection.getAccountInfo(treasuryTokenAccount).catch(() => null);
+      let swapResult: { solReceived: bigint; txSignature: string } | null = null;
+      try {
+        const { swapNukeToSOL } = await import('./swapService');
+        swapResult = await swapNukeToSOL(withdrawnAmount);
+        
+        logger.info('NUKE swapped to SOL successfully', {
+          nukeAmount: withdrawnAmount.toString(),
+          solReceived: swapResult.solReceived.toString(),
+          swapSignature: swapResult.txSignature,
+        });
+      } catch (error) {
+        logger.error('Failed to swap NUKE to SOL - aborting distribution', {
+          error: error instanceof Error ? error.message : String(error),
+          nukeAmount: withdrawnAmount.toString(),
+        });
+        return null; // Abort if swap fails
+      }
+
+      if (!swapResult || swapResult.solReceived === 0n) {
+        logger.warn('Swap returned zero SOL - skipping distribution');
+        return null;
+      }
+
+      const totalSolReceived = swapResult.solReceived;
+
+      // Step 8: Split SOL: 75% to holders, 25% to treasury
+      const holdersSol = (totalSolReceived * BigInt(75)) / BigInt(100); // 75% to holders
+      const treasurySol = (totalSolReceived * BigInt(25)) / BigInt(100); // 25% to treasury
+
+      logger.info('SOL split calculated', {
+        totalSolReceived: totalSolReceived.toString(),
+        holdersSol: holdersSol.toString(),
+        treasurySol: treasurySol.toString(),
+      });
+
+      // Step 9: Distribute SOL to holders
+      let distributionResult: {
+        distributedCount: number;
+        totalDistributed: bigint;
+        skippedCount: number;
+        signatures: Array<{ pubkey: string; amount: bigint; signature: string }>;
+        errors: Array<{ pubkey: string; error: string }>;
+      } | null = null;
+
+      if (holdersSol > 0n) {
+        try {
+          const { distributeSolToHolders } = await import('./solDistributionService');
+          distributionResult = await distributeSolToHolders(holdersSol);
+          
+          logger.info('SOL distributed to holders', {
+            distributedCount: distributionResult.distributedCount,
+            totalDistributed: distributionResult.totalDistributed.toString(),
+            skippedCount: distributionResult.skippedCount,
+            errors: distributionResult.errors.length,
+          });
+        } catch (error) {
+          logger.error('Failed to distribute SOL to holders', {
+            error: error instanceof Error ? error.message : String(error),
+            holdersSol: holdersSol.toString(),
+          });
+          // Continue - treasury portion can still be sent
+        }
+      }
+
+      // Step 10: Send treasury portion to treasury wallet
+      const treasuryWalletAddress = getTreasuryWalletAddress();
       let treasurySignature: string | undefined;
 
-      if (treasuryAmount > 0n) {
+      if (treasurySol > 0n) {
         try {
           const treasuryTx = new Transaction();
-
-          // Create treasury token account if needed
-          if (!treasuryAccountInfo) {
-            treasuryTx.add(
-              createAssociatedTokenAccountInstruction(
-                withdrawWallet.publicKey, // Payer
-                treasuryTokenAccount,
-                treasuryWalletAddress,
-                tokenMint,
-                TOKEN_2022_PROGRAM_ID
-              )
-            );
-          }
-
-          // Transfer treasury portion
           treasuryTx.add(
-            createTransferCheckedInstruction(
-              rewardTokenAccount,
-              tokenMint,
-              treasuryTokenAccount,
-              rewardWalletAddress, // Owner of fromAta (reward wallet)
-              treasuryAmount,
-              decimals,
-              [],
-              TOKEN_2022_PROGRAM_ID
-            )
+            SystemProgram.transfer({
+              fromPubkey: rewardWalletAddress,
+              toPubkey: treasuryWalletAddress,
+              lamports: Number(treasurySol),
+            })
           );
 
           const { blockhash } = await connection.getLatestBlockhash('confirmed');
           treasuryTx.recentBlockhash = blockhash;
-          treasuryTx.feePayer = withdrawWallet.publicKey;
+          treasuryTx.feePayer = rewardWalletAddress;
 
           treasurySignature = await sendAndConfirmTransaction(
             connection,
@@ -482,36 +545,48 @@ export class TaxService {
             { commitment: 'confirmed', maxRetries: 3 }
           );
 
-          logger.info('Treasury portion sent', {
+          logger.info('Treasury SOL sent', {
             signature: treasurySignature,
-            amount: treasuryAmount.toString(),
+            amount: treasurySol.toString(),
             to: treasuryWalletAddress.toBase58(),
           });
         } catch (error) {
-          logger.error('Failed to send treasury portion', {
+          logger.error('Failed to send treasury SOL', {
             error: error instanceof Error ? error.message : String(error),
-            amount: treasuryAmount.toString(),
+            amount: treasurySol.toString(),
           });
         }
       }
 
-      // Step 9: Update tax state
+      // Step 11: Update tax state
       const taxState = loadTaxState();
       const currentTotalTax = BigInt(taxState.totalTaxCollected || '0');
       const currentReward = BigInt(taxState.totalRewardAmount || '0');
       const currentTreasury = BigInt(taxState.totalTreasuryAmount || '0');
+      const currentSolDistributed = BigInt(taxState.totalSolDistributed || '0');
+      const currentSolToTreasury = BigInt(taxState.totalSolToTreasury || '0');
+      const currentNukeHarvested = BigInt(taxState.totalNukeHarvested || '0');
+      const currentNukeSold = BigInt(taxState.totalNukeSold || '0');
 
       taxState.totalTaxCollected = (currentTotalTax + totalTax).toString();
-      taxState.totalRewardAmount = (currentReward + rewardAmount).toString();
-      taxState.totalTreasuryAmount = (currentTreasury + treasuryAmount).toString();
+      taxState.totalRewardAmount = (currentReward + holdersSol).toString(); // SOL amount
+      taxState.totalTreasuryAmount = (currentTreasury + treasurySol).toString(); // SOL amount
+      taxState.totalSolDistributed = (currentSolDistributed + (distributionResult?.totalDistributed || 0n)).toString();
+      taxState.totalSolToTreasury = (currentSolToTreasury + treasurySol).toString();
+      taxState.totalNukeHarvested = (currentNukeHarvested + totalTax).toString();
+      taxState.totalNukeSold = (currentNukeSold + totalTax).toString();
       taxState.lastTaxDistribution = Date.now();
+      taxState.lastSwapTx = swapResult.txSignature;
+      taxState.lastDistributionTx = distributionResult?.signatures.map(s => s.signature).join(',') || null;
+      taxState.lastDistributionTime = Date.now();
+      
       taxState.taxDistributions.push({
         timestamp: Date.now(),
-        transactionAmount: totalTax.toString(), // Total tax collected
-        rewardAmount: rewardAmount.toString(),
-        treasuryAmount: treasuryAmount.toString(),
+        transactionAmount: totalTax.toString(), // Total NUKE tax collected
+        rewardAmount: holdersSol.toString(), // SOL distributed to holders
+        treasuryAmount: treasurySol.toString(), // SOL sent to treasury
         fromAddress: 'mint', // Withdrawn from mint
-        rewardSignature: undefined, // Remains in reward wallet
+        rewardSignature: swapResult.txSignature, // Swap transaction
         treasurySignature,
       });
 
@@ -524,8 +599,12 @@ export class TaxService {
 
       logger.info('Tax distribution complete', {
         totalTax: totalTax.toString(),
-        rewardAmount: rewardAmount.toString(),
-        treasuryAmount: treasuryAmount.toString(),
+        nukeSold: totalTax.toString(),
+        solReceived: totalSolReceived.toString(),
+        holdersSol: holdersSol.toString(),
+        treasurySol: treasurySol.toString(),
+        distributedCount: distributionResult?.distributedCount || 0,
+        swapSignature: swapResult.txSignature,
         treasurySignature,
         totalTaxCollected: taxState.totalTaxCollected,
         totalRewardAmount: taxState.totalRewardAmount,
@@ -533,10 +612,12 @@ export class TaxService {
       });
 
       return {
-        rewardAmount,
-        treasuryAmount,
+        rewardAmount: holdersSol, // SOL amount
+        treasuryAmount: treasurySol, // SOL amount
         totalTax,
         treasurySignature,
+        swapSignature: swapResult.txSignature,
+        distributionResult,
       };
     } catch (error) {
       logger.error('Error processing withheld tax', {
@@ -819,16 +900,28 @@ export class TaxService {
     totalTaxCollected: string;
     totalRewardAmount: string;
     totalTreasuryAmount: string;
+    totalSolDistributed: string;
+    totalSolToTreasury: string;
+    totalNukeHarvested: string;
+    totalNukeSold: string;
     lastTaxDistribution: number | null;
+    lastSwapTx: string | null;
+    lastDistributionTx: string | null;
     distributionCount: number;
   } {
     const taxState = loadTaxState();
     
     return {
       totalTaxCollected: taxState.totalTaxCollected,
-      totalRewardAmount: taxState.totalRewardAmount,
-      totalTreasuryAmount: taxState.totalTreasuryAmount,
+      totalRewardAmount: taxState.totalRewardAmount, // SOL amount
+      totalTreasuryAmount: taxState.totalTreasuryAmount, // SOL amount
+      totalSolDistributed: taxState.totalSolDistributed || '0',
+      totalSolToTreasury: taxState.totalSolToTreasury || '0',
+      totalNukeHarvested: taxState.totalNukeHarvested || '0',
+      totalNukeSold: taxState.totalNukeSold || '0',
       lastTaxDistribution: taxState.lastTaxDistribution,
+      lastSwapTx: taxState.lastSwapTx,
+      lastDistributionTx: taxState.lastDistributionTx,
       distributionCount: taxState.taxDistributions.length,
     };
   }

@@ -58,92 +58,107 @@ type RewardApiResponse = {
   } | null;
   tax?: {
     totalTaxCollected: string;
+    totalNukeHarvested: string;
+    totalNukeSold: string;
     totalRewardAmount: string;
     totalTreasuryAmount: string;
+    totalSolDistributed: string;
+    totalSolToTreasury: string;
     lastTaxDistribution: string | null;
+    lastSwapTx: string | null;
+    lastDistributionTx: string | null;
     distributionCount: number;
   };
 };
 
 /**
- * Fetch rewards from the backend and return a pre-formatted message string
- * along with the raw lastRun timestamp so callers can decide whether to send.
+ * Fetch rewards from the backend and return swap/distribution notification message
+ * Only returns a message if a swap + distribution occurred (lastSwapTx changed)
  */
-async function fetchRewardsSummary(backendUrl: string): Promise<{ message: string; lastRun: string | null }> {
+async function fetchSwapDistributionNotification(
+  backendUrl: string,
+  lastKnownSwapTx: string | null
+): Promise<{ message: string | null; lastSwapTx: string | null }> {
   const response = await axios.get<RewardApiResponse>(`${backendUrl}/dashboard/rewards`, { timeout: 30000 });
   const rewards = response.data;
 
-  const lastRunDisplay = rewards.lastRun ? new Date(rewards.lastRun).toLocaleString() : 'Never';
-  const nextRunDisplay = rewards.nextRun ? new Date(rewards.nextRun).toLocaleString() : 'N/A';
-
-  // Get price in SOL from backend (Raydium-based)
-  let priceSOL: number | null = null;
-  let priceSource = 'Raydium';
-  
-  // Prioritize tokenPrice.sol from backend (direct Raydium fetch), with null-safety
-  if (rewards.tokenPrice && rewards.tokenPrice.sol !== null && rewards.tokenPrice.sol > 0) {
-    priceSOL = rewards.tokenPrice.sol;
-    priceSource = rewards.tokenPrice.source === 'raydium' ? 'Raydium' : (rewards.tokenPrice.source || 'Unknown');
-  } else if (rewards.dex && rewards.dex.source === 'raydium' && rewards.dex.price !== null && rewards.dex.price > 0) {
-    // Fallback to dex price if tokenPrice not available
-    priceSOL = rewards.dex.price;
-    priceSource = 'Raydium';
+  // Check if tax data exists and has a swap transaction
+  if (!rewards.tax || !rewards.tax.lastSwapTx) {
+    return { message: null, lastSwapTx: null };
   }
 
+  const currentSwapTx = rewards.tax.lastSwapTx;
+  
+  // Only notify if swap transaction changed (new swap occurred)
+  if (currentSwapTx === lastKnownSwapTx) {
+    return { message: null, lastSwapTx: currentSwapTx };
+  }
+
+  // Format notification message for successful swap + distribution
+  const nukeSold = BigInt(rewards.tax.totalNukeSold || '0');
+  const solToHolders = BigInt(rewards.tax.totalSolDistributed || '0');
+  const solToTreasury = BigInt(rewards.tax.totalSolToTreasury || '0');
+  
+  // Convert from raw units to human-readable
+  const decimals = 6; // NUKE decimals
+  const nukeSoldFormatted = (Number(nukeSold) / Math.pow(10, decimals)).toFixed(2);
+  const solToHoldersFormatted = (Number(solToHolders) / 1e9).toFixed(6); // lamports to SOL
+  const solToTreasuryFormatted = (Number(solToTreasury) / 1e9).toFixed(6);
+  
+  // Get distribution count from last cycle
+  const distributionCount = rewards.tax.distributionCount || 0;
+  
   const messageLines = [
-    '📊 Reward System Status',
+    '🎁 NUKE Rewards Distributed',
     '',
-    `Last Run: ${lastRunDisplay}`,
-    `Next Run: ${nextRunDisplay}`,
-    `Status: ${rewards.isRunning ? 'Running' : 'Idle'}`,
-    '',
-    'Statistics:',
+    `• NUKE Sold: ${nukeSoldFormatted}`,
+    `• SOL to Holders: ${solToHoldersFormatted}`,
+    `• SOL to Treasury: ${solToTreasuryFormatted}`,
+    `• Holders Paid: ${distributionCount}`,
   ];
 
-  // Add price in SOL
-  if (priceSOL !== null && priceSOL > 0) {
-    messageLines.push(`• Price: ${priceSOL.toFixed(8)} SOL (${priceSource})`);
-  } else {
-    messageLines.push(`• Price: N/A (Raydium pool unavailable)`);
-  }
-
-  messageLines.push(
-    `• Total Holders: ${rewards.statistics.totalHolders}`,
-    `• Pending Payouts: ${rewards.statistics.pendingPayouts}`,
-    `• SOL Distributed: ${rewards.statistics.totalSOLDistributed.toFixed(6)}`
-  );
-
-  // Add tax information if available
-  if (rewards.tax) {
-    const taxTotal = BigInt(rewards.tax.totalTaxCollected || '0');
-    const taxReward = BigInt(rewards.tax.totalRewardAmount || '0');
-    const taxTreasury = BigInt(rewards.tax.totalTreasuryAmount || '0');
-    
-    // Convert from token units to readable format (assuming 6 decimals)
-    const decimals = 6;
-    const taxTotalFormatted = (Number(taxTotal) / Math.pow(10, decimals)).toFixed(2);
-    const taxRewardFormatted = (Number(taxReward) / Math.pow(10, decimals)).toFixed(2);
-    const taxTreasuryFormatted = (Number(taxTreasury) / Math.pow(10, decimals)).toFixed(2);
-    
-    messageLines.push(
-      '',
-      'Tax Distribution (4%):',
-      `• Total Collected: ${taxTotalFormatted} NUKE`,
-      `• Reward Pool (3%): ${taxRewardFormatted} NUKE`,
-      `• Treasury (1%): ${taxTreasuryFormatted} NUKE`,
-      `• Distributions: ${rewards.tax.distributionCount}`
-    );
+  if (currentSwapTx) {
+    messageLines.push(`• Tx: ${currentSwapTx.substring(0, 16)}...`);
   }
 
   const message = messageLines.join('\n');
 
-  return { message, lastRun: rewards.lastRun };
+  return { message, lastSwapTx: currentSwapTx };
 }
 
 async function handleRewardsCommand(bot: TelegramBot, chatId: number, backendUrl: string): Promise<void> {
   try {
-    const { message } = await fetchRewardsSummary(backendUrl);
-    await bot.sendMessage(chatId, message);
+    // For manual /rewards command, show current status
+    const response = await axios.get<RewardApiResponse>(`${backendUrl}/dashboard/rewards`, { timeout: 30000 });
+    const rewards = response.data;
+
+    const messageLines = [
+      '📊 Reward System Status',
+      '',
+    ];
+
+    if (rewards.tax) {
+      const nukeSold = BigInt(rewards.tax.totalNukeSold || '0');
+      const solToHolders = BigInt(rewards.tax.totalSolDistributed || '0');
+      const solToTreasury = BigInt(rewards.tax.totalSolToTreasury || '0');
+      
+      const decimals = 6;
+      const nukeSoldFormatted = (Number(nukeSold) / Math.pow(10, decimals)).toFixed(2);
+      const solToHoldersFormatted = (Number(solToHolders) / 1e9).toFixed(6);
+      const solToTreasuryFormatted = (Number(solToTreasury) / 1e9).toFixed(6);
+      
+      messageLines.push(
+        'Recent Distribution:',
+        `• NUKE Sold: ${nukeSoldFormatted}`,
+        `• SOL to Holders: ${solToHoldersFormatted}`,
+        `• SOL to Treasury: ${solToTreasuryFormatted}`,
+        `• Distributions: ${rewards.tax.distributionCount}`,
+      );
+    } else {
+      messageLines.push('No distributions yet.');
+    }
+
+    await bot.sendMessage(chatId, messageLines.join('\n'));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await bot.sendMessage(chatId, `Failed to fetch rewards: ${reason}`);
@@ -205,46 +220,35 @@ function main(): void {
 
     // Automatic reward notifications loop:
     // - Runs every POLLING_INTERVAL_MS (default 60000ms)
-    // - Fetches rewards once per tick
-    // - Sends to all authorized chats only when lastRun increases
-    let lastBroadcastLastRun: string | null = null;
+    // - Only sends notifications when a swap + distribution occurred (lastSwapTx changed)
+    let lastKnownSwapTx: string | null = null;
 
     const tickAutomaticRewards = async () => {
       try {
-        const { message, lastRun } = await fetchRewardsSummary(backendUrl);
-        if (!lastRun) {
-          console.log('[AutoRewards] No lastRun from backend yet; skipping broadcast');
+        const { message, lastSwapTx } = await fetchSwapDistributionNotification(backendUrl, lastKnownSwapTx);
+        
+        if (!message) {
+          // No new swap/distribution detected
           return;
         }
 
-        const lastRunDate = new Date(lastRun);
-        const lastBroadcastDate = lastBroadcastLastRun ? new Date(lastBroadcastLastRun) : null;
-
-        if (lastBroadcastDate && lastRunDate <= lastBroadcastDate) {
-          console.log('[AutoRewards] No new rewards run detected; lastRun <= lastBroadcastLastRun', {
-            lastRun,
-            lastBroadcastLastRun,
-          });
-          return;
-        }
-
-        console.log('[AutoRewards] New rewards run detected, broadcasting to authorized chats', {
-          lastRun,
+        console.log('[AutoRewards] New swap + distribution detected, broadcasting to authorized chats', {
+          lastSwapTx,
           authorizedChatIds,
         });
 
         for (const chatId of authorizedChatIds) {
           try {
             await bot.sendMessage(chatId, message);
-            console.log('[AutoRewards] Sent rewards summary', { chatId });
+            console.log('[AutoRewards] Sent swap/distribution notification', { chatId });
           } catch (sendErr) {
-            console.error('[AutoRewards] Failed to send rewards summary', { chatId, error: sendErr });
+            console.error('[AutoRewards] Failed to send notification', { chatId, error: sendErr });
           }
         }
 
-        lastBroadcastLastRun = lastRun;
+        lastKnownSwapTx = lastSwapTx;
       } catch (err) {
-        console.error('[AutoRewards] Error while fetching or broadcasting rewards:', err);
+        console.error('[AutoRewards] Error while fetching or broadcasting notifications:', err);
       }
     };
 

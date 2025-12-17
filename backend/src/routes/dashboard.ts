@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import {
   getAllHoldersWithStatus,
   getEligibleHolders,
-  getPendingPayouts,
   getLastReward,
 } from '../services/rewardService';
 import { getSchedulerStatus } from '../scheduler/rewardScheduler';
@@ -30,11 +29,10 @@ router.get('/holders', async (req: Request, res: Response): Promise<void> => {
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 1000, 1000);
     const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
 
-    logger.info('Dashboard API: GET /dashboard/holders', {
+    logger.debug('Dashboard API: GET /dashboard/holders', {
       eligibleOnly,
       limit,
       offset,
-      timestamp: new Date().toISOString(),
     });
 
     // Get all holders with status
@@ -76,10 +74,9 @@ router.get('/holders', async (req: Request, res: Response): Promise<void> => {
     };
 
     const duration = Date.now() - startTime;
-    logger.info('Dashboard API: GET /dashboard/holders completed', {
+    logger.debug('Dashboard API: GET /dashboard/holders completed', {
       duration: `${duration}ms`,
       total,
-      returned: paginatedHolders.length,
     });
 
     res.status(200).json(response);
@@ -107,9 +104,8 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     const startTime = Date.now();
     const filterPubkey = req.query.pubkey as string | undefined;
 
-    logger.info('Dashboard API: GET /dashboard/rewards', {
+    logger.debug('Dashboard API: GET /dashboard/rewards', {
       filterPubkey,
-      timestamp: new Date().toISOString(),
     });
 
     // Get scheduler status
@@ -136,27 +132,20 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         ? parseFloat(tokenPriceUSDResult.toFixed(6))
         : null;
 
-    // Get pending payouts
-    const pendingPayouts = getPendingPayouts();
-    const totalSOLDistributed = pendingPayouts
-      .filter(p => !filterPubkey || p.pubkey === filterPubkey)
-      .reduce((sum, p) => sum + (p.rewardSOL || 0), 0);
+    // Get tax statistics (SOL distributions come from tax processing, not pending payouts)
+    const { TaxService } = await import('../services/taxService');
+    const taxStats = TaxService.getTaxStatistics();
+    const totalSOLDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9; // Convert lamports to SOL
 
     // Calculate statistics
     const blacklistedCount = allHolders.filter(h => isBlacklisted(h.owner)).length;
     const excludedCount = allHolders.length - eligibleHolders.length - blacklistedCount;
 
-    // Filter by pubkey if provided
+    // Filter by pubkey if provided (for eligible holders only - no pending payouts)
     let filteredEligible = eligibleHolders;
-    let filteredPending = pendingPayouts;
     if (filterPubkey) {
       filteredEligible = eligibleHolders.filter(h => h.pubkey === filterPubkey);
-      filteredPending = pendingPayouts.filter(p => p.pubkey === filterPubkey);
     }
-
-    // Get tax statistics
-    const { TaxService } = await import('../services/taxService');
-    const taxStats = TaxService.getTaxStatistics();
 
     const response = {
       lastRun: schedulerStatus.lastRun ? new Date(schedulerStatus.lastRun).toISOString() : null,
@@ -167,7 +156,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
         eligibleHolders: eligibleHolders.length,
         excludedHolders: excludedCount,
         blacklistedHolders: blacklistedCount,
-        pendingPayouts: pendingPayouts.length,
+        pendingPayouts: 0, // No longer used - distributions happen immediately
         totalSOLDistributed: parseFloat((totalSOLDistributed || 0).toFixed(6)),
       },
       tokenPrice: {
@@ -185,19 +174,23 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
             }
           : null,
       tax: {
-        totalTaxCollected: taxStats.totalTaxCollected,
-        totalRewardAmount: taxStats.totalRewardAmount,
-        totalTreasuryAmount: taxStats.totalTreasuryAmount,
+        totalTaxCollected: taxStats.totalTaxCollected, // NUKE harvested
+        totalNukeHarvested: taxStats.totalNukeHarvested,
+        totalNukeSold: taxStats.totalNukeSold,
+        totalRewardAmount: taxStats.totalRewardAmount, // SOL distributed to holders
+        totalTreasuryAmount: taxStats.totalTreasuryAmount, // SOL sent to treasury
+        totalSolDistributed: taxStats.totalSolDistributed,
+        totalSolToTreasury: taxStats.totalSolToTreasury,
         lastTaxDistribution: taxStats.lastTaxDistribution ? new Date(taxStats.lastTaxDistribution).toISOString() : null,
+        lastSwapTx: taxStats.lastSwapTx,
+        lastDistributionTx: taxStats.lastDistributionTx,
         distributionCount: taxStats.distributionCount,
       },
       filtered: filterPubkey ? {
         pubkey: filterPubkey,
         eligible: filteredEligible.length > 0,
-        pendingPayouts: filteredPending.length,
-        totalSOLForHolder: parseFloat(
-          filteredPending.reduce((sum, p) => sum + (p.rewardSOL || 0), 0).toFixed(6)
-        ),
+        pendingPayouts: 0, // No longer used
+        totalSOLForHolder: 0, // Historical data only - check tax distributions
       } : null,
     };
 

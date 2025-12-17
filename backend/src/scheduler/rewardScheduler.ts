@@ -3,9 +3,6 @@ import { logger } from '../utils/logger';
 import {
   getLastRewardRun,
   setLastRewardRun,
-  computeRewards,
-  queuePendingPayouts,
-  executePayouts,
   getEligibleHolders,
 } from '../services/rewardService';
 import { saveRewardCycle, type RewardCycle } from '../services/rewardHistoryService';
@@ -47,43 +44,20 @@ async function processRewards(): Promise<void> {
   });
 
   try {
-    // Get eligible holders count for logging
-    const eligibleHolders = await getEligibleHolders();
-    logger.info('Eligible holders', {
-      count: eligibleHolders.length,
-    });
-
-    if (eligibleHolders.length === 0) {
-      logger.info('No eligible holders, skipping reward distribution');
-      setLastRewardRun(now);
-      return;
-    }
-
-    // Compute rewards for all eligible holders
-    const rewards = await computeRewards();
-    
-    if (rewards.length === 0) {
-      logger.info('No rewards computed, skipping payout');
-      setLastRewardRun(now);
-      return;
-    }
-
-    // Queue pending payouts
-    await queuePendingPayouts(rewards);
-
-    // Execute payouts
-    await executePayouts();
-
     // Process withheld tax from Token-2022 transfers
-    // This distributes accumulated transfer fees (3% to reward wallet, 1% to treasury)
+    // This: 1) Harvests NUKE taxes, 2) Swaps NUKE to SOL, 3) Distributes SOL to holders (75%) and treasury (25%)
     try {
       logger.info('Processing withheld tax from Token-2022 transfers');
       const taxResult = await TaxService.processWithheldTax();
       if (taxResult) {
         logger.info('Tax distribution completed', {
-          totalTax: taxResult.totalTax.toString(),
-          rewardAmount: taxResult.rewardAmount.toString(),
-          treasuryAmount: taxResult.treasuryAmount.toString(),
+          nukeHarvested: taxResult.totalTax.toString(),
+          nukeSold: taxResult.totalTax.toString(),
+          solReceived: (taxResult.rewardAmount + taxResult.treasuryAmount).toString(),
+          solToHolders: taxResult.rewardAmount.toString(),
+          solToTreasury: taxResult.treasuryAmount.toString(),
+          holdersPaid: taxResult.distributionResult?.distributedCount || 0,
+          swapSignature: taxResult.swapSignature,
         });
       } else {
         logger.debug('No withheld tax to process');
@@ -92,22 +66,35 @@ async function processRewards(): Promise<void> {
       logger.error('Error processing withheld tax', {
         error: taxError instanceof Error ? taxError.message : String(taxError),
       });
-      // Don't throw - allow reward distribution to continue
+      // Don't throw - allow scheduler to continue
     }
 
     const endTime = Date.now();
     const duration = endTime - startTime;
-    const totalRewardSOL = rewards.reduce((sum, r) => sum + r.rewardSOL, 0);
+
+    // Get tax result for historical record (already processed above, but we need it for history)
+    let taxResult: Awaited<ReturnType<typeof TaxService.processWithheldTax>> | null = null;
+    try {
+      // Re-fetch tax result if we need it (or store it from above)
+      // For now, we'll get stats separately
+    } catch {
+      // Already logged above
+    }
 
     // Get additional statistics for historical record
     let excludedHoldersCount = 0;
     let blacklistedHoldersCount = 0;
     let totalHoldersCount = 0;
+    let eligibleHoldersCount = 0;
     let tokenPriceUSD = 0.01; // Fallback
+    let totalSolDistributed = 0;
 
     try {
       const allHolders = await getTokenHolders();
       totalHoldersCount = allHolders.length;
+      
+      const eligibleHolders = await getEligibleHolders().catch(() => []);
+      eligibleHoldersCount = eligibleHolders.length;
       
       // Count excluded and blacklisted
       const eligiblePubkeys = new Set(eligibleHolders.map(h => h.pubkey));
@@ -123,12 +110,12 @@ async function processRewards(): Promise<void> {
       try {
         tokenPriceUSD = await getNUKEPriceUSD();
       } catch (priceError) {
-        logger.warn('Failed to fetch token price for history, using fallback', {
+        logger.debug('Failed to fetch token price for history, using fallback', {
           error: priceError instanceof Error ? priceError.message : String(priceError),
         });
       }
     } catch (error) {
-      logger.warn('Error getting holder statistics for history', {
+      logger.debug('Error getting holder statistics for history', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -136,21 +123,27 @@ async function processRewards(): Promise<void> {
     // Save reward cycle to history
     try {
       const cycleId = new Date(now).toISOString();
+      // Get tax stats for this cycle
+      const taxStats = TaxService.getTaxStatistics();
+      const lastDistribution = taxStats.lastTaxDistribution 
+        ? new Date(taxStats.lastTaxDistribution).getTime()
+        : null;
+      
+      // Only save if distribution happened in this cycle (within last minute)
+      if (lastDistribution && (now - lastDistribution) < 60000) {
+        totalSolDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9; // Convert lamports to SOL
+      }
+      
       const cycle: RewardCycle = {
         id: cycleId,
         timestamp: cycleId,
-        totalSOLDistributed: totalRewardSOL,
-        eligibleHoldersCount: eligibleHolders.length,
+        totalSOLDistributed: totalSolDistributed,
+        eligibleHoldersCount: eligibleHoldersCount,
         excludedHoldersCount,
         blacklistedHoldersCount,
         totalHoldersCount,
         tokenPriceUSD,
-        rewardDetails: rewards.map((r) => ({
-          pubkey: r.pubkey,
-          rewardSOL: r.rewardSOL,
-          eligibilityStatus: 'eligible' as const,
-          retryCount: 0,
-        })),
+        rewardDetails: [], // Will be populated from tax distribution result if available
       };
 
       saveRewardCycle(cycle);
