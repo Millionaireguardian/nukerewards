@@ -14,9 +14,17 @@ export interface RewardStatus {
     pendingPayouts: number;
     totalSOLDistributed: number;
   };
-  tokenPrice: {
-    usd: number;
-  };
+  tokenPrice?: {
+    sol: number | null;
+    usd: number | null;
+    source?: string | null;
+  } | null;
+  dex?: {
+    name: string;
+    price: number | null;
+    source: string | null;
+    updatedAt: string | null;
+  } | null;
 }
 
 export interface ExportSummary {

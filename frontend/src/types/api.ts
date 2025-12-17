@@ -31,12 +31,17 @@ export interface RewardsResponse {
   nextRun: string | null;
   isRunning: boolean;
   statistics: RewardStatistics;
-  // Temporarily removed tokenPrice for debugging
-  // tokenPrice: {
-  //   sol: number | null;
-  //   usd: number | null;
-  //   source?: 'raydium' | null;
-  // };
+  tokenPrice?: {
+    sol: number | null;
+    usd: number | null;
+    source?: string | null;
+  } | null;
+  dex?: {
+    name: string;
+    price: number | null;
+    source: string | null;
+    updatedAt: string | null;
+  } | null;
   filtered: {
     pubkey: string;
     eligible: boolean;
@@ -58,6 +63,7 @@ export interface PayoutsResponse {
   total: number;
   limit: number;
   payouts: Payout[];
+  hasMore: boolean;
   summary: {
     pending: number;
     failed: number;
