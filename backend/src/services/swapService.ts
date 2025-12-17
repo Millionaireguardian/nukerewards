@@ -370,6 +370,7 @@ export async function swapNukeToSOL(
   } catch (error) {
     logger.error('Error swapping NUKE to SOL via Raydium', {
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
       amountNuke: amountNuke.toString(),
     });
     throw error;

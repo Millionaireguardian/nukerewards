@@ -195,7 +195,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     };
 
     const duration = Date.now() - startTime;
-    logger.info('Dashboard API: GET /dashboard/rewards completed', {
+    logger.debug('Dashboard API: GET /dashboard/rewards completed', {
       duration: `${duration}ms`,
     });
 
@@ -245,7 +245,7 @@ router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
     const filterStatus = req.query.status as 'pending' | 'failed' | undefined;
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 500);
 
-    logger.info('Dashboard API: GET /dashboard/payouts', {
+    logger.debug('Dashboard API: GET /dashboard/payouts', {
       filterPubkey,
       filterStatus,
       limit,
@@ -279,7 +279,7 @@ router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
     };
 
     const duration = Date.now() - startTime;
-    logger.info('Dashboard API: GET /dashboard/payouts completed', {
+    logger.debug('Dashboard API: GET /dashboard/payouts completed', {
       duration: `${duration}ms`,
       total: response.total,
       returned: response.payouts.length,

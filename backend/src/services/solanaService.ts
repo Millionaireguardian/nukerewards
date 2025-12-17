@@ -127,7 +127,7 @@ export async function getTokenHolders(): Promise<TokenHolder[]> {
       return 0;
     });
 
-    logger.info('Fetched token holders', {
+    logger.debug('Fetched token holders', {
       count: holders.length,
       mint: tokenMint.toBase58(),
       totalAccountsFound: tokenAccounts.length,

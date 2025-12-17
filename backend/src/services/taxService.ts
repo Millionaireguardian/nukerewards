@@ -507,7 +507,9 @@ export class TaxService {
       } catch (error) {
         logger.error('Failed to swap NUKE to SOL - aborting distribution', {
           error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
           nukeAmount: withdrawnAmount.toString(),
+          nukeAmountHuman: (Number(withdrawnAmount) / Math.pow(10, decimals)).toFixed(6),
         });
         return null; // Abort if swap fails
       }
