@@ -359,40 +359,64 @@ export class TaxService {
       }
 
       // Step 3: Check if there's anything to harvest BEFORE doing transactions
-      // This prevents wasting fees on unnecessary transactions
+      // CRITICAL: We must scan ALL token accounts, including those with zero balance
+      // because withheld fees are stored separately and accounts with fees may have zero balance
       let totalWithheldInAccounts = 0n;
       let accountsWithWithheld = 0;
       
       try {
-        const { getTokenHolders } = await import('./solanaService');
-        const holders = await getTokenHolders();
         const { getTransferFeeAmount, unpackAccount } = await import('@solana/spl-token');
         
-        // Check first 50 token accounts for withheld fees
-        const accountsToCheck = holders.slice(0, 50);
-        for (const holder of accountsToCheck) {
+        // Get ALL token accounts for this mint (including zero-balance accounts)
+        // This is critical because accounts with withheld fees may have zero balance
+        const allTokenAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
+          filters: [
+            {
+              memcmp: {
+                offset: 0, // Mint address is first 32 bytes
+                bytes: tokenMint.toBase58(),
+              },
+            },
+          ],
+        });
+        
+        logger.info('Scanning ALL token accounts for withheld fees', {
+          totalAccounts: allTokenAccounts.length,
+        });
+        
+        // Check ALL accounts for withheld fees (not just first 50)
+        for (const { pubkey, account } of allTokenAccounts) {
           try {
-            const accountInfo = await connection.getAccountInfo(new PublicKey(holder.address));
-            if (accountInfo) {
-              const parsedAccount = unpackAccount(new PublicKey(holder.address), accountInfo, TOKEN_2022_PROGRAM_ID);
-              const transferFeeAmount = getTransferFeeAmount(parsedAccount);
-              if (transferFeeAmount && transferFeeAmount.withheldAmount > 0n) {
-                totalWithheldInAccounts += transferFeeAmount.withheldAmount;
-                accountsWithWithheld++;
-                logger.debug('Token account has withheld fees', {
-                  account: holder.address,
-                  withheldAmount: transferFeeAmount.withheldAmount.toString(),
-                  withheldAmountHuman: (Number(transferFeeAmount.withheldAmount) / Math.pow(10, decimals)).toFixed(6),
-                });
-              }
+            const parsedAccount = unpackAccount(pubkey, account, TOKEN_2022_PROGRAM_ID);
+            
+            // Verify this account belongs to our mint
+            if (!parsedAccount.mint.equals(tokenMint)) {
+              continue;
+            }
+            
+            const transferFeeAmount = getTransferFeeAmount(parsedAccount);
+            if (transferFeeAmount && transferFeeAmount.withheldAmount > 0n) {
+              totalWithheldInAccounts += transferFeeAmount.withheldAmount;
+              accountsWithWithheld++;
+              const withheldHuman = (Number(transferFeeAmount.withheldAmount) / Math.pow(10, decimals)).toFixed(6);
+              logger.debug('Token account has withheld fees', {
+                account: pubkey.toBase58(),
+                withheldAmount: transferFeeAmount.withheldAmount.toString(),
+                withheldAmountHuman: withheldHuman,
+                accountBalance: parsedAccount.amount.toString(),
+              });
             }
           } catch (error) {
             // Skip accounts that can't be parsed
+            logger.debug('Skipping account (parse error)', {
+              account: pubkey.toBase58(),
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
         }
         
-        logger.info('Pre-harvest check: scanned token accounts for withheld fees', {
-          accountsChecked: accountsToCheck.length,
+        logger.info('Pre-harvest check: scanned ALL token accounts for withheld fees', {
+          totalAccountsScanned: allTokenAccounts.length,
           accountsWithWithheld,
           totalWithheldInAccounts: totalWithheldInAccounts.toString(),
           totalWithheldInAccountsHuman: (Number(totalWithheldInAccounts) / Math.pow(10, decimals)).toFixed(6),
@@ -400,53 +424,67 @@ export class TaxService {
           mintWithheldAmountHuman: (Number(mintWithheldAmount) / Math.pow(10, decimals)).toFixed(6),
         });
       } catch (error) {
-        logger.warn('Failed to check token accounts for withheld fees', {
+        logger.error('Failed to check token accounts for withheld fees', {
           error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
         });
+        // Continue anyway - harvest might still work
       }
 
-      // Early exit: If there's nothing to harvest (no tokens in accounts AND nothing in mint), skip transactions
+      // Step 4: Always attempt harvest (even if scan found nothing)
+      // The scan might miss accounts, or new fees might have been collected
+      // Empty sources array = harvest from ALL token accounts
+      const emptySources: PublicKey[] = []; // Empty array = harvest from ALL accounts
+      
+      // Log what we're about to do
       const totalAvailable = totalWithheldInAccounts + mintWithheldAmount;
-      if (totalAvailable === 0n) {
-        logger.info('No withheld tokens to process - skipping harvest/withdraw transactions', {
-          reason: 'No tax collected in token accounts or mint',
+      if (totalAvailable > 0n) {
+        logger.info('Withheld tokens detected - proceeding with harvest', {
+          totalWithheldInAccounts: totalWithheldInAccounts.toString(),
+          mintWithheldAmount: mintWithheldAmount.toString(),
+          totalAvailable: totalAvailable.toString(),
+        });
+      } else {
+        logger.info('No withheld tokens detected in scan, but attempting harvest anyway', {
+          reason: 'Scan might miss accounts or new fees collected since scan',
           totalWithheldInAccounts: totalWithheldInAccounts.toString(),
           mintWithheldAmount: mintWithheldAmount.toString(),
         });
-        return null;
       }
+      
+      // Always attempt harvest - it will harvest from ALL token accounts
+      let harvestSignature: string | undefined;
+      try {
+        logger.info('Harvesting withheld tokens from ALL token accounts to mint', {
+          sources: 'ALL (empty array = all accounts)',
+          estimatedFromScan: totalWithheldInAccounts.toString(),
+        });
+        
+        harvestSignature = await harvestWithheldTokensToMint(
+          connection,
+          withdrawWallet,
+          tokenMint,
+          emptySources, // Empty array = harvest from ALL token accounts
+          { commitment: 'confirmed' }
+        );
 
-      // Step 4: Harvest withheld tokens to mint (only if there are tokens in accounts)
-      // This moves withheld fees from individual accounts to the mint
-      if (totalWithheldInAccounts > 0n) {
-        try {
-          const emptySources: PublicKey[] = []; // Empty array = all token accounts
-          logger.info('Harvesting withheld tokens from token accounts to mint', {
-            estimatedAmount: totalWithheldInAccounts.toString(),
-            estimatedAmountHuman: (Number(totalWithheldInAccounts) / Math.pow(10, decimals)).toFixed(6),
-          });
-          
-          const harvestSignature = await harvestWithheldTokensToMint(
-            connection,
-            withdrawWallet,
-            tokenMint,
-            emptySources,
-            { commitment: 'confirmed' }
-          );
-
-          logger.info('Harvested withheld tokens to mint', {
+        logger.info('Harvest completed', {
+          signature: harvestSignature,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        // If harvest fails with "no withheld tokens", that's okay - just log it
+        if (errorMessage.includes('no withheld') || errorMessage.includes('No withheld')) {
+          logger.info('Harvest found no withheld tokens (this is normal if no fees collected)', {
             signature: harvestSignature,
-            estimatedAmount: totalWithheldInAccounts.toString(),
           });
-        } catch (error) {
+        } else {
           logger.error('Failed to harvest withheld tokens', {
-            error: error instanceof Error ? error.message : String(error),
+            error: errorMessage,
             stack: error instanceof Error ? error.stack : undefined,
           });
-          // Continue - might still be able to withdraw from mint
         }
-      } else {
-        logger.info('Skipping harvest - no tokens in token accounts (checking mint only)');
+        // Continue - might still be able to withdraw from mint if there was something already there
       }
 
       // Step 4: Create withdrawal account (reward wallet ATA)
@@ -516,13 +554,20 @@ export class TaxService {
         mintWithheldAmountHuman: (Number(mintWithheldAfterHarvest) / Math.pow(10, decimals)).toFixed(6),
       });
       
-      // Early exit: If mint has no withheld tokens after harvest, nothing to withdraw
+      // Check mint after harvest - if still zero, nothing to withdraw
       if (mintWithheldAfterHarvest === 0n) {
         logger.info('No tokens in mint after harvest - nothing to withdraw', {
-          reason: 'All tokens may have been withdrawn already, or no tax was collected',
+          reason: 'No tax collected or already withdrawn in previous cycle',
+          mintWithheldBeforeHarvest: mintWithheldAmount.toString(),
+          mintWithheldAfterHarvest: mintWithheldAfterHarvest.toString(),
         });
         return null;
       }
+      
+      logger.info('Tokens found in mint after harvest - proceeding with withdrawal', {
+        mintWithheldAmount: mintWithheldAfterHarvest.toString(),
+        mintWithheldAmountHuman: (Number(mintWithheldAfterHarvest) / Math.pow(10, decimals)).toFixed(6),
+      });
       
       // Withdraw from mint (tokens are in the mint after harvesting)
       try {
