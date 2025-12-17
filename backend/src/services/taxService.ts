@@ -526,51 +526,50 @@ export class TaxService {
       
       // Withdraw from mint (tokens are in the mint after harvesting)
       try {
-          const { withdrawWithheldTokensFromMint } = await import('@solana/spl-token');
-          const emptySigners: Keypair[] = [];
-          
-          logger.info('Withdrawing withheld tokens from mint', {
-            mintWithheldAmount: mintWithheldAfterHarvest.toString(),
-            destination: rewardTokenAccount.toBase58(),
-          });
-          
-          withdrawSignature = await withdrawWithheldTokensFromMint(
-            connection,
-            withdrawWallet, // Payer
-            tokenMint, // Mint
-            rewardTokenAccount, // Destination
-            withdrawWallet.publicKey, // Authority
-            emptySigners, // Multi-signers
-            { commitment: 'confirmed' }, // ConfirmOptions
-            TOKEN_2022_PROGRAM_ID // Program ID
-          );
+        const { withdrawWithheldTokensFromMint } = await import('@solana/spl-token');
+        const emptySigners: Keypair[] = [];
+        
+        logger.info('Withdrawing withheld tokens from mint', {
+          mintWithheldAmount: mintWithheldAfterHarvest.toString(),
+          destination: rewardTokenAccount.toBase58(),
+        });
+        
+        withdrawSignature = await withdrawWithheldTokensFromMint(
+          connection,
+          withdrawWallet, // Payer
+          tokenMint, // Mint
+          rewardTokenAccount, // Destination
+          withdrawWallet.publicKey, // Authority
+          emptySigners, // Multi-signers
+          { commitment: 'confirmed' }, // ConfirmOptions
+          TOKEN_2022_PROGRAM_ID // Program ID
+        );
 
-          // Get the balance after withdrawal to determine how much was withdrawn
-          const rewardAccount = await getAccount(connection, rewardTokenAccount, 'confirmed', TOKEN_2022_PROGRAM_ID);
-          const balanceAfter = rewardAccount.amount;
-          withdrawnAmount = balanceAfter - balanceBefore;
+        // Get the balance after withdrawal to determine how much was withdrawn
+        const rewardAccount = await getAccount(connection, rewardTokenAccount, 'confirmed', TOKEN_2022_PROGRAM_ID);
+        const balanceAfter = rewardAccount.amount;
+        withdrawnAmount = balanceAfter - balanceBefore;
 
-          logger.info('Withdrew withheld tokens from mint', {
-            signature: withdrawSignature,
-            balanceBefore: balanceBefore.toString(),
-            balanceAfter: balanceAfter.toString(),
-            withdrawnAmount: withdrawnAmount.toString(),
-            to: rewardTokenAccount.toBase58(),
-          });
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.warn('Failed to withdraw withheld tokens from mint', {
-            error: errorMessage,
-            authority: withdrawWallet.publicKey.toBase58(),
-          });
-          
-          // Check if it's an authority error
-          if (errorMessage.includes('authority') || errorMessage.includes('insufficient')) {
-            logger.error('Withdraw authority mismatch. Please update the withdraw withheld authority on the mint to match the wallet being used.');
-          }
-          
-          return null;
+        logger.info('Withdrew withheld tokens from mint', {
+          signature: withdrawSignature,
+          balanceBefore: balanceBefore.toString(),
+          balanceAfter: balanceAfter.toString(),
+          withdrawnAmount: withdrawnAmount.toString(),
+          to: rewardTokenAccount.toBase58(),
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.warn('Failed to withdraw withheld tokens from mint', {
+          error: errorMessage,
+          authority: withdrawWallet.publicKey.toBase58(),
+        });
+        
+        // Check if it's an authority error
+        if (errorMessage.includes('authority') || errorMessage.includes('insufficient')) {
+          logger.error('Withdraw authority mismatch. Please update the withdraw withheld authority on the mint to match the wallet being used.');
         }
+        
+        return null;
       }
 
       if (withdrawnAmount === BigInt(0)) {
