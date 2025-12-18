@@ -118,7 +118,7 @@ export function HistoricalRewardChart() {
     loadHistoricalData();
     // Removed auto-refresh - chart data doesn't need frequent updates
     // const interval = setInterval(loadHistoricalData, 300000); // 5 minutes if needed
-    return () => clearInterval(interval);
+    // return () => clearInterval(interval);
   }, [timeRange]);
 
   const formatDate = (dateString: string) => {

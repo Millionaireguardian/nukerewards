@@ -15,7 +15,19 @@ interface RaydiumCache {
 }
 
 let cachedRaydiumData: RaydiumCache | null = null;
-const RAYDIUM_CACHE_TTL = 60 * 1000; // 60 seconds
+const RAYDIUM_CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache
+const RAYDIUM_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between RPC calls
+
+// Track last successful fetch time to enforce cooldown
+let lastRaydiumFetch: number = 0;
+let pendingRaydiumFetch: Promise<{
+  price: number | null;
+  liquidityUSD: number | null;
+  baseVaultBalance: bigint;
+  quoteVaultBalance: bigint;
+  source: 'raydium' | null;
+  updatedAt: string;
+}> | null = null;
 
 // SOL price in USD (fallback if we can't fetch)
 const DEFAULT_SOL_PRICE_USD = 100;
@@ -239,8 +251,21 @@ async function fetchRaydiumPoolData(
 }
 
 /**
- * Get Raydium price and liquidity data
+ * Check if error is a 429 rate limit error
+ */
+function isRateLimitError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.message.includes('429') || 
+           error.message.includes('Too Many Requests') ||
+           error.message.includes('max usage reached');
+  }
+  return false;
+}
+
+/**
+ * Get Raydium price and liquidity data (with caching and cooldown)
  * Returns cached data if available and fresh
+ * Enforces 5-minute cooldown between RPC calls
  */
 export async function getRaydiumData(): Promise<{
   price: number | null;
@@ -250,27 +275,52 @@ export async function getRaydiumData(): Promise<{
   source: 'raydium' | null;
   updatedAt: string;
 }> {
-  try {
-    // Check cache first
-    const now = Date.now();
-    if (cachedRaydiumData && (now - cachedRaydiumData.timestamp) < RAYDIUM_CACHE_TTL) {
-      logger.debug('Using cached Raydium data', {
-        price: cachedRaydiumData.price,
-        liquidityUSD: cachedRaydiumData.liquidityUSD,
-        cachedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
-      });
-      return {
-        price: cachedRaydiumData.price,
-        liquidityUSD: cachedRaydiumData.liquidityUSD,
-        baseVaultBalance: cachedRaydiumData.baseVaultBalance,
-        quoteVaultBalance: cachedRaydiumData.quoteVaultBalance,
-        source: cachedRaydiumData.source,
-        updatedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
-      };
-    }
+  // Check cache first
+  const now = Date.now();
+  if (cachedRaydiumData && (now - cachedRaydiumData.timestamp) < RAYDIUM_CACHE_TTL) {
+    logger.debug('Using cached Raydium data', {
+      price: cachedRaydiumData.price,
+      liquidityUSD: cachedRaydiumData.liquidityUSD,
+      cachedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
+    });
+    return {
+      price: cachedRaydiumData.price,
+      liquidityUSD: cachedRaydiumData.liquidityUSD,
+      baseVaultBalance: cachedRaydiumData.baseVaultBalance,
+      quoteVaultBalance: cachedRaydiumData.quoteVaultBalance,
+      source: cachedRaydiumData.source,
+      updatedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
+    };
+  }
 
-    // Find or use pool ID
-    const poolId = await findRaydiumPool(connection, RAYDIUM_CONFIG.baseMint, RAYDIUM_CONFIG.quoteMint);
+  // Check cooldown - if within 5 minutes of last fetch, return stale cache
+  const timeSinceLastFetch = now - lastRaydiumFetch;
+  if (lastRaydiumFetch > 0 && timeSinceLastFetch < RAYDIUM_COOLDOWN && cachedRaydiumData) {
+    logger.debug('Within cooldown period, returning stale Raydium cache', {
+      timeSinceLastFetch: Math.round(timeSinceLastFetch / 1000),
+      cacheAge: Math.round((now - cachedRaydiumData.timestamp) / 1000),
+    });
+    return {
+      price: cachedRaydiumData.price,
+      liquidityUSD: cachedRaydiumData.liquidityUSD,
+      baseVaultBalance: cachedRaydiumData.baseVaultBalance,
+      quoteVaultBalance: cachedRaydiumData.quoteVaultBalance,
+      source: cachedRaydiumData.source,
+      updatedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
+    };
+  }
+
+  // If there's already a pending fetch, wait for it
+  if (pendingRaydiumFetch) {
+    logger.debug('Raydium fetch already in progress, waiting...');
+    return pendingRaydiumFetch;
+  }
+
+  // Create new fetch promise
+  pendingRaydiumFetch = (async () => {
+    try {
+      // Find or use pool ID
+      const poolId = await findRaydiumPool(connection, RAYDIUM_CONFIG.baseMint, RAYDIUM_CONFIG.quoteMint);
     if (!poolId) {
       logger.debug('Raydium pool not found or not configured');
       cachedRaydiumData = {
@@ -330,62 +380,89 @@ export async function getRaydiumData(): Promise<{
     const solPriceUSD = await getSOLPriceUSD(); // Mainnet reference price
     const liquidityUSD = price !== null ? 2 * quoteAmount * solPriceUSD : null;
 
-    // Update cache
-    cachedRaydiumData = {
-      price,
-      liquidityUSD,
-      baseVaultBalance: poolData.baseVaultBalance,
-      quoteVaultBalance: poolData.quoteVaultBalance,
-      timestamp: now,
-      source: 'raydium',
-    };
+      // Update cache and last fetch time
+      cachedRaydiumData = {
+        price,
+        liquidityUSD,
+        baseVaultBalance: poolData.baseVaultBalance,
+        quoteVaultBalance: poolData.quoteVaultBalance,
+        timestamp: now,
+        source: 'raydium',
+      };
+      lastRaydiumFetch = now;
 
-    logger.info('Raydium data fetched', {
-      price,
-      priceDescription: price ? `${price} WSOL per NUKE` : 'null',
-      liquidityUSD,
-      baseVaultBalance: poolData.baseVaultBalance.toString(),
-      quoteVaultBalance: poolData.quoteVaultBalance.toString(),
-      baseAmount: baseAmount.toString(),
-      quoteAmount: quoteAmount.toString(),
-      baseDecimals: poolData.baseDecimals,
-      quoteDecimals: poolData.quoteDecimals,
-      poolId: poolId.toBase58(),
-    });
+      logger.info('Raydium data fetched', {
+        price,
+        priceDescription: price ? `${price} WSOL per NUKE` : 'null',
+        liquidityUSD,
+        baseVaultBalance: poolData.baseVaultBalance.toString(),
+        quoteVaultBalance: poolData.quoteVaultBalance.toString(),
+        baseAmount: baseAmount.toString(),
+        quoteAmount: quoteAmount.toString(),
+        baseDecimals: poolData.baseDecimals,
+        quoteDecimals: poolData.quoteDecimals,
+        poolId: poolId.toBase58(),
+      });
 
-    return {
-      price,
-      liquidityUSD,
-      baseVaultBalance: poolData.baseVaultBalance,
-      quoteVaultBalance: poolData.quoteVaultBalance,
-      source: 'raydium',
-      updatedAt: new Date(now).toISOString(),
-    };
-  } catch (error) {
-    logger.error('Error fetching Raydium data', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    
-    // Return null data
-    const now = Date.now();
-    cachedRaydiumData = {
-      price: null,
-      liquidityUSD: null,
-      baseVaultBalance: BigInt(0),
-      quoteVaultBalance: BigInt(0),
-      timestamp: now,
-      source: null,
-    };
-    
-    return {
-      price: null,
-      liquidityUSD: null,
-      baseVaultBalance: BigInt(0),
-      quoteVaultBalance: BigInt(0),
-      source: null,
-      updatedAt: new Date(now).toISOString(),
-    };
-  }
+      return {
+        price,
+        liquidityUSD,
+        baseVaultBalance: poolData.baseVaultBalance,
+        quoteVaultBalance: poolData.quoteVaultBalance,
+        source: 'raydium',
+        updatedAt: new Date(now).toISOString(),
+      };
+    } catch (error) {
+      // If it's a rate limit error and we have stale cache, return it
+      if (isRateLimitError(error) && cachedRaydiumData) {
+        logger.warn('Rate limit hit, returning stale Raydium cache', {
+          cacheAge: Math.round((Date.now() - cachedRaydiumData.timestamp) / 1000),
+        });
+        return {
+          price: cachedRaydiumData.price,
+          liquidityUSD: cachedRaydiumData.liquidityUSD,
+          baseVaultBalance: cachedRaydiumData.baseVaultBalance,
+          quoteVaultBalance: cachedRaydiumData.quoteVaultBalance,
+          source: cachedRaydiumData.source,
+          updatedAt: new Date(cachedRaydiumData.timestamp).toISOString(),
+        };
+      }
+
+      // Only log non-rate-limit errors as errors
+      if (isRateLimitError(error)) {
+        logger.warn('Rate limit error fetching Raydium data (no cache available)');
+      } else {
+        logger.error('Error fetching Raydium data', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      
+      // Return null data
+      const errorNow = Date.now();
+      cachedRaydiumData = {
+        price: null,
+        liquidityUSD: null,
+        baseVaultBalance: BigInt(0),
+        quoteVaultBalance: BigInt(0),
+        timestamp: errorNow,
+        source: null,
+      };
+      
+      return {
+        price: null,
+        liquidityUSD: null,
+        baseVaultBalance: BigInt(0),
+        quoteVaultBalance: BigInt(0),
+        source: null,
+        updatedAt: new Date(errorNow).toISOString(),
+      };
+    } finally {
+      // Clear pending fetch
+      pendingRaydiumFetch = null;
+    }
+  })();
+
+  return pendingRaydiumFetch;
 }
 
 /**

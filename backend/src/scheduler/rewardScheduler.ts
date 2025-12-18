@@ -203,12 +203,9 @@ export function startRewardScheduler(): void {
     minRewardInterval: `${REWARD_CONFIG.MIN_REWARD_INTERVAL / 1000}s`,
   });
 
-  // Run immediately on startup (if conditions are met)
-  processRewards().catch((error) => {
-    logger.error('Error in initial reward scheduler run', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
+  // Don't run immediately on startup - wait for first scheduled interval
+  // This prevents rate limiting on startup when multiple services are initializing
+  logger.debug('Skipping immediate run on startup to prevent rate limiting');
 
   // Schedule periodic runs
   schedulerInterval = setInterval(() => {
