@@ -19,10 +19,36 @@ export interface MintInfo {
   isInitialized: boolean;
 }
 
+// Cache for token holders to reduce RPC calls
+interface TokenHoldersCache {
+  holders: TokenHolder[];
+  timestamp: number;
+}
+
+let cachedTokenHolders: TokenHoldersCache | null = null;
+const TOKEN_HOLDERS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
+// Cache for mint info
+interface MintInfoCache {
+  info: MintInfo;
+  timestamp: number;
+}
+
+let cachedMintInfo: MintInfoCache | null = null;
+const MINT_INFO_CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+
 /**
- * Fetch mint account information
+ * Fetch mint account information (with caching)
  */
 export async function getMintInfo(): Promise<MintInfo> {
+  // Check cache first
+  const now = Date.now();
+  if (cachedMintInfo && (now - cachedMintInfo.timestamp) < MINT_INFO_CACHE_TTL) {
+    logger.debug('Using cached mint info', {
+      cachedAt: new Date(cachedMintInfo.timestamp).toISOString(),
+    });
+    return cachedMintInfo.info;
+  }
   try {
     const mintAccountInfo = await connection.getAccountInfo(tokenMint);
     
@@ -32,7 +58,7 @@ export async function getMintInfo(): Promise<MintInfo> {
 
     const parsedMint = unpackMint(tokenMint, mintAccountInfo, TOKEN_2022_PROGRAM_ID);
     
-    return {
+    const mintInfo: MintInfo = {
       address: tokenMint.toBase58(),
       decimals: parsedMint.decimals,
       supply: parsedMint.supply.toString(),
@@ -40,6 +66,14 @@ export async function getMintInfo(): Promise<MintInfo> {
       freezeAuthority: parsedMint.freezeAuthority ? parsedMint.freezeAuthority.toBase58() : null,
       isInitialized: parsedMint.mintAuthority !== null,
     };
+
+    // Update cache
+    cachedMintInfo = {
+      info: mintInfo,
+      timestamp: now,
+    };
+
+    return mintInfo;
   } catch (error) {
     logger.error('Error fetching mint info', {
       error: error instanceof Error ? error.message : String(error),
@@ -65,10 +99,24 @@ export async function getTokenSupply(): Promise<string> {
 }
 
 /**
- * Fetch all token holders (token accounts) for the mint
+ * Fetch all token holders (token accounts) for the mint (with caching)
  */
 export async function getTokenHolders(): Promise<TokenHolder[]> {
   try {
+    // Check cache first
+    const now = Date.now();
+    if (cachedTokenHolders && (now - cachedTokenHolders.timestamp) < TOKEN_HOLDERS_CACHE_TTL) {
+      logger.debug('Using cached token holders', {
+        count: cachedTokenHolders.holders.length,
+        cachedAt: new Date(cachedTokenHolders.timestamp).toISOString(),
+      });
+      return cachedTokenHolders.holders;
+    }
+
+    logger.debug('Fetching token holders from RPC (cache miss or expired)', {
+      mint: tokenMint.toBase58(),
+    });
+
     // Token-2022 accounts can have variable sizes due to extensions
     // Remove dataSize filter to get all accounts, then filter by mint
     const tokenAccounts = await connection.getProgramAccounts(TOKEN_2022_PROGRAM_ID, {
@@ -134,6 +182,12 @@ export async function getTokenHolders(): Promise<TokenHolder[]> {
       accountsWithBalance: holders.length,
     });
 
+    // Update cache
+    cachedTokenHolders = {
+      holders,
+      timestamp: now,
+    };
+
     return holders;
   } catch (error) {
     logger.error('Error fetching token holders', {
@@ -142,5 +196,21 @@ export async function getTokenHolders(): Promise<TokenHolder[]> {
     });
     throw error;
   }
+}
+
+/**
+ * Clear token holders cache (useful for testing or forced refresh)
+ */
+export function clearTokenHoldersCache(): void {
+  cachedTokenHolders = null;
+  logger.debug('Token holders cache cleared');
+}
+
+/**
+ * Clear mint info cache (useful for testing or forced refresh)
+ */
+export function clearMintInfoCache(): void {
+  cachedMintInfo = null;
+  logger.debug('Mint info cache cleared');
 }
 
