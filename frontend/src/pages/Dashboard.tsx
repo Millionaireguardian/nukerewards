@@ -119,56 +119,7 @@ export function Dashboard() {
 
   return (
     <div className="dashboard-page">
-      {/* Section 1: Recent Distributions Carousel - Moved to Top */}
-      <section className="dashboard-section">
-        <GlassCard className="dashboard-section-card">
-          <h2 className="section-title">Recent Distributions</h2>
-        <div className="distribution-carousel">
-          {distributionHistory.length > 0 ? (
-            <div className="carousel-container">
-              {distributionHistory.map((item, index) => (
-                <DistributionCard key={index} item={item} />
-              ))}
-            </div>
-          ) : (
-            <div className="carousel-container">
-              <DistributionCard
-                item={{
-                  date: '2025-01-01',
-                  time: '12:00',
-                  status: 'Completed',
-                  harvestedSOL: 12.345678,
-                  distributedSOL: 9.259258,
-                  totalHolders: 1234,
-                }}
-              />
-              <DistributionCard
-                item={{
-                  date: '2025-01-02',
-                  time: '15:30',
-                  status: 'Completed',
-                  harvestedSOL: 8.123456,
-                  distributedSOL: 6.092837,
-                  totalHolders: 987,
-                }}
-              />
-              <DistributionCard
-                item={{
-                  date: '2025-01-03',
-                  time: '18:45',
-                  status: 'Scheduled',
-                  harvestedSOL: 0,
-                  distributedSOL: 0,
-                  totalHolders: 0,
-                }}
-              />
-            </div>
-          )}
-        </div>
-        </GlassCard>
-      </section>
-
-      {/* Section 2: Two-Column Stats Layout */}
+      {/* Section 1: Two-Column Stats Layout */}
       <section className="dashboard-section">
         <div className="stats-two-column">
           {/* Left Side: Project Statistics */}
@@ -228,6 +179,55 @@ export function Dashboard() {
             </div>
           </GlassCard>
         </div>
+      </section>
+
+      {/* Section 2: Recent Distributions Carousel */}
+      <section className="dashboard-section">
+        <GlassCard className="dashboard-section-card">
+          <h2 className="section-title">Recent Distributions</h2>
+        <div className="distribution-carousel">
+          {distributionHistory.length > 0 ? (
+            <div className="carousel-container">
+              {distributionHistory.map((item, index) => (
+                <DistributionCard key={index} item={item} />
+              ))}
+            </div>
+          ) : (
+            <div className="carousel-container">
+              <DistributionCard
+                item={{
+                  date: '2025-01-01',
+                  time: '12:00',
+                  status: 'Completed',
+                  harvestedSOL: 12.345678,
+                  distributedSOL: 9.259258,
+                  totalHolders: 1234,
+                }}
+              />
+              <DistributionCard
+                item={{
+                  date: '2025-01-02',
+                  time: '15:30',
+                  status: 'Completed',
+                  harvestedSOL: 8.123456,
+                  distributedSOL: 6.092837,
+                  totalHolders: 987,
+                }}
+              />
+              <DistributionCard
+                item={{
+                  date: '2025-01-03',
+                  time: '18:45',
+                  status: 'Scheduled',
+                  harvestedSOL: 0,
+                  distributedSOL: 0,
+                  totalHolders: 0,
+                }}
+              />
+            </div>
+          )}
+        </div>
+        </GlassCard>
       </section>
 
       {/* Section 5: Charts */}

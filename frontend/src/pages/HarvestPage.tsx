@@ -44,8 +44,10 @@ export function HarvestPage() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
+    // Removed auto-refresh - users can manually refresh if needed
+    // Data doesn't need to update every minute
+    // const interval = setInterval(loadData, 300000); // 5 minutes if needed
+    // return () => clearInterval(interval);
   }, [currentPage, pageSize, dateFilters]);
 
   const columns: TableColumn<RewardCycle>[] = [

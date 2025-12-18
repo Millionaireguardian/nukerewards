@@ -14,6 +14,37 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
+// Request deduplication: Track pending requests to prevent concurrent duplicate calls
+const pendingRequests = new Map<string, Promise<any>>();
+const REQUEST_COOLDOWN = 5 * 1000; // 5 seconds minimum between same endpoint calls
+const lastRequestTime = new Map<string, number>();
+
+/**
+ * Get or create a deduplicated request
+ */
+async function getDeduplicatedRequest<T>(
+  key: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const now = Date.now();
+  const lastTime = lastRequestTime.get(key) || 0;
+  
+  // If request was made recently, return cached promise if available
+  if (now - lastTime < REQUEST_COOLDOWN && pendingRequests.has(key)) {
+    logger.debug('Request deduplication: reusing pending request', { key });
+    return pendingRequests.get(key)!;
+  }
+
+  // Create new request
+  const requestPromise = fn().finally(() => {
+    pendingRequests.delete(key);
+    lastRequestTime.set(key, Date.now());
+  });
+
+  pendingRequests.set(key, requestPromise);
+  return requestPromise;
+}
+
 /**
  * GET /dashboard/holders
  * Returns list of all holders with eligibility status and reward info
@@ -122,10 +153,11 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     // Get scheduler status
     const schedulerStatus = getSchedulerStatus();
 
-    // Get all holders and eligible holders (with graceful error handling)
+    // Get all holders and eligible holders (with graceful error handling and deduplication)
     let allHolders: Array<{ address: string; owner: string; amount: string; decimals: number }> = [];
     try {
-      allHolders = await getTokenHolders();
+      // Use deduplication to prevent concurrent requests
+      allHolders = await getDeduplicatedRequest('tokenHolders', () => getTokenHolders());
     } catch (error) {
       // If we get a rate limit error, try to use cached data from rewardService
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -140,7 +172,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
       }
     }
     
-    const eligibleHolders = await getEligibleHolders().catch(() => []);
+    const eligibleHolders = await getDeduplicatedRequest('eligibleHolders', () => getEligibleHolders()).catch(() => []);
     
     // Fetch Raydium-based pricing with strong fallbacks
     const [tokenPriceSOLResult, tokenPriceUSDResult, raydiumData] = await Promise.all([

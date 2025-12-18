@@ -46,8 +46,10 @@ export function PayoutHistoryPage() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000); // Refresh every 60s
-    return () => clearInterval(interval);
+    // Removed auto-refresh - users can manually refresh if needed
+    // Data doesn't need to update every minute
+    // const interval = setInterval(loadData, 300000); // 5 minutes if needed
+    // return () => clearInterval(interval);
   }, [currentPage, pageSize, filters]);
 
   const handleExport = async () => {

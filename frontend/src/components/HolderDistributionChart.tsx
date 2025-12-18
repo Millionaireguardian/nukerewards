@@ -21,8 +21,9 @@ export function HolderDistributionChart() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
+    // Removed auto-refresh - chart data doesn't need frequent updates
+    // const interval = setInterval(loadData, 300000); // 5 minutes if needed
+    // return () => clearInterval(interval);
   }, []);
 
   if (loading || !data || !data.statistics) {

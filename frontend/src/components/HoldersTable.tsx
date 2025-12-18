@@ -7,7 +7,7 @@ interface HoldersTableProps {
   refreshInterval?: number;
 }
 
-export function HoldersTable({ refreshInterval = 60000 }: HoldersTableProps) {
+export function HoldersTable({ refreshInterval = 300000 }: HoldersTableProps) {
   const [holders, setHolders] = useState<Holder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

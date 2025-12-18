@@ -82,7 +82,8 @@ export function NotificationManager() {
     };
 
     checkNotifications();
-    const interval = setInterval(checkNotifications, 60000);
+    // Reduced frequency - notifications don't need to check every minute
+    const interval = setInterval(checkNotifications, 300000); // 5 minutes
     return () => clearInterval(interval);
   }, [notificationState]);
 
