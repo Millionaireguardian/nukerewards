@@ -26,7 +26,7 @@ interface TokenHoldersCache {
 }
 
 let cachedTokenHolders: TokenHoldersCache | null = null;
-const TOKEN_HOLDERS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+const TOKEN_HOLDERS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache (increased to reduce RPC calls)
 
 // Cache for mint info
 interface MintInfoCache {
@@ -35,10 +35,11 @@ interface MintInfoCache {
 }
 
 let cachedMintInfo: MintInfoCache | null = null;
-const MINT_INFO_CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache
+const MINT_INFO_CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache (increased to reduce RPC calls)
 
 /**
  * Fetch mint account information (with caching)
+ * Returns stale cache on 429 errors to prevent service disruption
  */
 export async function getMintInfo(): Promise<MintInfo> {
   // Check cache first
@@ -75,10 +76,25 @@ export async function getMintInfo(): Promise<MintInfo> {
 
     return mintInfo;
   } catch (error) {
-    logger.error('Error fetching mint info', {
-      error: error instanceof Error ? error.message : String(error),
-      mint: tokenMint.toBase58(),
-    });
+    // If it's a rate limit error and we have stale cache, return it
+    if (isRateLimitError(error) && cachedMintInfo) {
+      logger.warn('Rate limit hit, returning stale mint info cache', {
+        cacheAge: Math.round((Date.now() - cachedMintInfo.timestamp) / 1000),
+      });
+      return cachedMintInfo.info;
+    }
+    
+    // Only log non-rate-limit errors as errors
+    if (isRateLimitError(error)) {
+      logger.warn('Rate limit error fetching mint info (no cache available)', {
+        mint: tokenMint.toBase58(),
+      });
+    } else {
+      logger.error('Error fetching mint info', {
+        error: error instanceof Error ? error.message : String(error),
+        mint: tokenMint.toBase58(),
+      });
+    }
     throw error;
   }
 }
@@ -99,7 +115,20 @@ export async function getTokenSupply(): Promise<string> {
 }
 
 /**
+ * Check if error is a 429 rate limit error
+ */
+function isRateLimitError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.message.includes('429') || 
+           error.message.includes('Too Many Requests') ||
+           error.message.includes('max usage reached');
+  }
+  return false;
+}
+
+/**
  * Fetch all token holders (token accounts) for the mint (with caching)
+ * Returns stale cache on 429 errors to prevent service disruption
  */
 export async function getTokenHolders(): Promise<TokenHolder[]> {
   try {
@@ -190,10 +219,26 @@ export async function getTokenHolders(): Promise<TokenHolder[]> {
 
     return holders;
   } catch (error) {
-    logger.error('Error fetching token holders', {
-      error: error instanceof Error ? error.message : String(error),
-      mint: tokenMint.toBase58(),
-    });
+    // If it's a rate limit error and we have stale cache, return it
+    if (isRateLimitError(error) && cachedTokenHolders) {
+      logger.warn('Rate limit hit, returning stale cache', {
+        cacheAge: Math.round((Date.now() - cachedTokenHolders.timestamp) / 1000),
+        count: cachedTokenHolders.holders.length,
+      });
+      return cachedTokenHolders.holders;
+    }
+    
+    // Only log non-rate-limit errors as errors, rate limits are logged as warnings
+    if (isRateLimitError(error)) {
+      logger.warn('Rate limit error fetching token holders (no cache available)', {
+        mint: tokenMint.toBase58(),
+      });
+    } else {
+      logger.error('Error fetching token holders', {
+        error: error instanceof Error ? error.message : String(error),
+        mint: tokenMint.toBase58(),
+      });
+    }
     throw error;
   }
 }

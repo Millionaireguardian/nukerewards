@@ -81,12 +81,23 @@ router.get('/holders', async (req: Request, res: Response): Promise<void> => {
 
     res.status(200).json(response);
   } catch (error) {
-    logger.error('Error fetching holders for dashboard', {
-      error: error instanceof Error ? error.message : String(error),
-      query: req.query,
-    });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isRateLimit = errorMessage.includes('429') || errorMessage.includes('Too Many Requests');
+    
+    // Don't log rate limit errors as errors, just warnings
+    if (isRateLimit) {
+      logger.warn('Rate limit error in dashboard/holders', {
+        query: req.query,
+      });
+    } else {
+      logger.error('Error fetching holders for dashboard', {
+        error: errorMessage,
+        query: req.query,
+      });
+    }
+    
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMessage,
       holders: [],
       total: 0,
     });
@@ -111,8 +122,24 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     // Get scheduler status
     const schedulerStatus = getSchedulerStatus();
 
-    // Get all holders and eligible holders
-    const allHolders = await getTokenHolders();
+    // Get all holders and eligible holders (with graceful error handling)
+    let allHolders: Array<{ address: string; owner: string; amount: string; decimals: number }> = [];
+    try {
+      allHolders = await getTokenHolders();
+    } catch (error) {
+      // If we get a rate limit error, try to use cached data from rewardService
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests')) {
+        logger.warn('Rate limit error in dashboard/rewards, using fallback data', {
+          query: req.query,
+        });
+        // Return empty array - the response will still work with tax stats
+        allHolders = [];
+      } else {
+        throw error;
+      }
+    }
+    
     const eligibleHolders = await getEligibleHolders().catch(() => []);
     
     // Fetch Raydium-based pricing with strong fallbacks
@@ -201,10 +228,21 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
 
     res.status(200).json(response);
   } catch (error) {
-    logger.error('Error fetching rewards summary for dashboard', {
-      error: error instanceof Error ? error.message : String(error),
-      query: req.query,
-    });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isRateLimit = errorMessage.includes('429') || errorMessage.includes('Too Many Requests');
+    
+    // Don't log rate limit errors as errors, just warnings
+    if (isRateLimit) {
+      logger.warn('Rate limit error in dashboard/rewards', {
+        query: req.query,
+      });
+    } else {
+      logger.error('Error fetching rewards summary for dashboard', {
+        error: errorMessage,
+        query: req.query,
+      });
+    }
+    
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Unknown error',
       lastRun: null,
