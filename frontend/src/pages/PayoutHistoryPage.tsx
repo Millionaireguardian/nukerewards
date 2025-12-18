@@ -87,7 +87,7 @@ export function PayoutHistoryPage() {
       key: 'rewardSOL',
       header: 'Reward SOL',
       accessor: (row) => (
-        <span style={{ color: '#4a90e2', fontWeight: 600 }}>
+        <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
           {(row.rewardSOL || 0).toFixed(6)} SOL
         </span>
       ),
@@ -144,7 +144,7 @@ export function PayoutHistoryPage() {
             {`${row.transactionSignature.substring(0, 8)}...`}
           </span>
         ) : (
-          <span style={{ color: '#999' }}>N/A</span>
+          <span style={{ color: 'var(--text-muted)' }}>N/A</span>
         ),
       sortable: false,
     },

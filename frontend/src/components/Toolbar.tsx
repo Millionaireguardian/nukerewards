@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import { ThemeToggle } from './ThemeToggle';
 import './Toolbar.css';
 
 interface NavItem {
@@ -24,7 +25,7 @@ export function Toolbar() {
     <nav className="toolbar">
       <div className="toolbar-container">
         <div className="toolbar-brand">
-          <h1>NUKE Rewards</h1>
+          <h1>NUKE</h1>
         </div>
         <ul className="toolbar-nav">
           {navItems.map((item) => (
@@ -38,6 +39,9 @@ export function Toolbar() {
             </li>
           ))}
         </ul>
+        <div className="toolbar-actions">
+          <ThemeToggle />
+        </div>
       </div>
     </nav>
   );

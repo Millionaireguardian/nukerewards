@@ -198,15 +198,15 @@ export function HistoricalRewardChart() {
         <ChartComponent data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="colorSOL" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#4a90e2" stopOpacity={0.8} />
-              <stop offset="95%" stopColor="#4a90e2" stopOpacity={0} />
+              <stop offset="5%" stopColor={getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#3b82f6'} stopOpacity={0.8} />
+              <stop offset="95%" stopColor={getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#3b82f6'} stopOpacity={0} />
             </linearGradient>
             <linearGradient id="colorHolders" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#28a745" stopOpacity={0.8} />
-              <stop offset="95%" stopColor="#28a745" stopOpacity={0} />
+              <stop offset="5%" stopColor={getComputedStyle(document.documentElement).getPropertyValue('--accent-success').trim() || '#10b981'} stopOpacity={0.8} />
+              <stop offset="95%" stopColor={getComputedStyle(document.documentElement).getPropertyValue('--accent-success').trim() || '#10b981'} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" />
+          <CartesianGrid strokeDasharray="3 3" stroke={getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || 'rgba(59, 130, 246, 0.2)'} opacity={0.3} />
           <XAxis
             dataKey="date"
             tickFormatter={formatDate}
@@ -231,7 +231,7 @@ export function HistoricalRewardChart() {
             yAxisId="right"
             type="monotone"
             dataKey="totalSOL"
-            stroke="#4a90e2"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#3b82f6'}
             fill={chartType === 'area' ? 'url(#colorSOL)' : undefined}
             name="Total SOL"
             strokeWidth={2}
@@ -242,7 +242,7 @@ export function HistoricalRewardChart() {
             yAxisId="left"
             type="monotone"
             dataKey="eligibleHolders"
-            stroke="#28a745"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-success').trim() || '#10b981'}
             fill={chartType === 'area' ? 'url(#colorHolders)' : undefined}
             name="Eligible Holders"
             strokeWidth={2}
@@ -253,7 +253,7 @@ export function HistoricalRewardChart() {
             yAxisId="left"
             type="monotone"
             dataKey="pendingPayouts"
-            stroke="#ffc107"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-warning').trim() || '#f59e0b'}
             name="Pending Payouts"
             strokeWidth={2}
             dot={{ r: 4 }}

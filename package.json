@@ -11,7 +11,9 @@
     "send-tokens": "node send-tokens.js",
     "update-metadata": "node update-metadata.js",
     "create-tax-token": "tsx createTaxToken.ts",
-    "update-transfer-fee": "tsx updateTransferFee.ts"
+    "update-transfer-fee": "tsx updateTransferFee.ts",
+    "activate-transfer-fee": "tsx activate-transfer-fee.ts",
+    "verify-transfer-fee-config": "tsx verify-transfer-fee-config.ts"
   },
   "dependencies": {
     "@metaplex-foundation/mpl-token-metadata": "^3.2.1",

@@ -62,7 +62,7 @@ export function RewardTrendsChart() {
       <h3>Reward Trends (Last 20 Updates)</h3>
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={trendData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" />
+          <CartesianGrid strokeDasharray="3 3" stroke={getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || 'rgba(59, 130, 246, 0.2)'} opacity={0.3} />
           <XAxis
             dataKey="timestamp"
             angle={-45}
@@ -78,7 +78,7 @@ export function RewardTrendsChart() {
             yAxisId="left"
             type="monotone"
             dataKey="eligibleHolders"
-            stroke="#28a745"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-success').trim() || '#10b981'}
             name="Eligible Holders"
             strokeWidth={2}
           />
@@ -86,7 +86,7 @@ export function RewardTrendsChart() {
             yAxisId="left"
             type="monotone"
             dataKey="pendingPayouts"
-            stroke="#ffc107"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-warning').trim() || '#f59e0b'}
             name="Pending Payouts"
             strokeWidth={2}
           />
@@ -94,7 +94,7 @@ export function RewardTrendsChart() {
             yAxisId="right"
             type="monotone"
             dataKey="totalSOL"
-            stroke="#4a90e2"
+            stroke={getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#3b82f6'}
             name="Total SOL"
             strokeWidth={2}
           />

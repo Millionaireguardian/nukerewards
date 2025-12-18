@@ -58,16 +58,23 @@ export function HoldersValueChart() {
     status: holder.eligibilityStatus,
   }));
 
+  // Get theme colors from CSS variables
+  const getThemeColor = (colorName: string) => {
+    const root = document.documentElement;
+    const computedStyle = getComputedStyle(root);
+    return computedStyle.getPropertyValue(`--accent-${colorName}`).trim() || '#3b82f6';
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'eligible':
-        return '#28a745';
+        return getThemeColor('success');
       case 'excluded':
-        return '#ffc107';
+        return getThemeColor('warning');
       case 'blacklisted':
-        return '#dc3545';
+        return getThemeColor('danger');
       default:
-        return '#6c757d';
+        return getThemeColor('primary');
     }
   };
 
@@ -79,7 +86,7 @@ export function HoldersValueChart() {
           data={chartData}
           margin={{ top: 20, right: 30, left: 20, bottom: 100 }}
         >
-          <CartesianGrid strokeDasharray="3 3" />
+          <CartesianGrid strokeDasharray="3 3" stroke={getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || 'rgba(59, 130, 246, 0.2)'} opacity={0.3} />
           <XAxis
             dataKey="pubkey"
             angle={-45}

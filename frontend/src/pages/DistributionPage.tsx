@@ -3,6 +3,7 @@ import { fetchPayouts } from '../services/api';
 import type { Payout } from '../types/api';
 import { Table } from '../components/Table';
 import type { TableColumn } from '../components/Table';
+import { StatCard } from '../components/StatCard';
 import { exportToExcel } from '../utils/exportUtils';
 import { showNotification } from '../components/Notifications';
 import './DistributionPage.css';
@@ -24,7 +25,7 @@ export function DistributionPage() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000);
+    const interval = setInterval(loadData, 300000);
     return () => clearInterval(interval);
   }, []);
 
@@ -43,7 +44,7 @@ export function DistributionPage() {
       key: 'rewardSOL',
       header: 'Reward SOL',
       accessor: (row) => (
-        <span style={{ color: '#4a90e2', fontWeight: 600 }}>
+        <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
           {(row.rewardSOL || 0).toFixed(6)} SOL
         </span>
       ),
@@ -157,46 +158,44 @@ export function DistributionPage() {
 
   return (
     <div className="distribution-page">
-      <div className="page-header">
-        <h2>Distribution History</h2>
-        <p className="page-subtitle">SOL payout distribution records and status</p>
-      </div>
+      <section className="dashboard-section">
+        <h1 className="dashboard-title">Distribution</h1>
+        <p className="dashboard-subtitle">SOL payout distribution records and status</p>
+      </section>
 
-      <div className="distribution-summary">
-        <div className="summary-stat">
-          <span className="stat-label">Total Payouts:</span>
-          <span className="stat-value">{payouts.length}</span>
+      <section className="dashboard-section">
+        <h2 className="section-title">Distribution Summary</h2>
+        <div className="stats-grid">
+          <StatCard
+            label="Total Payouts"
+            value={payouts.length.toLocaleString()}
+          />
+          <StatCard
+            label="Pending"
+            value={payouts.filter((p) => p.status === 'pending').length.toLocaleString()}
+          />
+          <StatCard
+            label="Failed"
+            value={payouts.filter((p) => p.status === 'failed').length.toLocaleString()}
+          />
+          <StatCard
+            label="Total SOL"
+            value={`${payouts.reduce((sum, p) => sum + (p.rewardSOL || 0), 0).toFixed(6)} SOL`}
+          />
         </div>
-        <div className="summary-stat">
-          <span className="stat-label">Pending:</span>
-          <span className="stat-value stat-pending">
-            {payouts.filter((p) => p.status === 'pending').length}
-          </span>
-        </div>
-        <div className="summary-stat">
-          <span className="stat-label">Failed:</span>
-          <span className="stat-value stat-failed">
-            {payouts.filter((p) => p.status === 'failed').length}
-          </span>
-        </div>
-        <div className="summary-stat highlight">
-          <span className="stat-label">Total SOL:</span>
-          <span className="stat-value stat-sol">
-            {payouts.reduce((sum, p) => sum + (p.rewardSOL || 0), 0).toFixed(6)} SOL
-          </span>
-        </div>
-      </div>
+      </section>
 
-      <div className="export-toolbar">
-        <button
-          onClick={handleExcelExport}
-          className="export-excel-btn"
-        >
-          Export to Excel
-        </button>
-      </div>
+      <section className="dashboard-section">
+        <div className="export-toolbar">
+          <button
+            onClick={handleExcelExport}
+            className="export-excel-btn"
+          >
+            Export to Excel
+          </button>
+        </div>
 
-      <Table
+        <Table
         data={payouts}
         columns={columns}
         searchable={true}
@@ -217,7 +216,8 @@ export function DistributionPage() {
         pageSize={50}
         loading={loading}
         emptyMessage="No distribution records available"
-      />
+        />
+      </section>
     </div>
   );
 }

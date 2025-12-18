@@ -29,7 +29,6 @@ export function HistoricalRewardsPage() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        setLoading(true);
         setError(null);
 
         // Calculate date range
@@ -62,7 +61,7 @@ export function HistoricalRewardsPage() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000); // Refresh every 60s
+    const interval = setInterval(loadData, 300000); // Refresh every 5 minutes
     return () => clearInterval(interval);
   }, [timeRange]);
 

@@ -1,36 +1,41 @@
 .payouts-page {
-  padding: 20px;
-  max-width: 1400px;
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
   margin: 0 auto;
+  min-height: 100vh;
 }
 
-.page-header {
-  margin-bottom: 30px;
-  padding: 20px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+.dashboard-section {
+  margin-bottom: 3rem;
 }
 
-.page-header h2 {
-  margin: 0 0 10px 0;
-  font-size: 28px;
-  color: #333;
+.dashboard-section:first-of-type {
+  margin-top: 1rem;
 }
 
-.page-subtitle {
-  margin: 0;
-  color: #666;
-  font-size: 16px;
+.dashboard-title {
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-subtitle {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 1rem;
+}
+
+/* Light theme adjustments */
+[data-theme='light'] .dashboard-subtitle {
+  color: rgba(0, 0, 0, 0.6);
 }
 
 @media (max-width: 768px) {
   .payouts-page {
-    padding: 10px;
+    padding: 8.85rem 1rem 2rem;
   }
 
-  .page-header h2 {
-    font-size: 24px;
+  .dashboard-title {
+    font-size: 1.5rem;
   }
 }
-

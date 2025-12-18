@@ -51,13 +51,13 @@ export function PayoutStatusChart() {
       <h3>Payout Status</h3>
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" />
+          <CartesianGrid strokeDasharray="3 3" stroke={getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || 'rgba(59, 130, 246, 0.2)'} opacity={0.3} />
           <XAxis dataKey="name" />
           <YAxis />
           <Tooltip formatter={(value: number) => value.toLocaleString()} />
           <Legend />
-          <Bar dataKey="Pending" fill="#ffc107" />
-          <Bar dataKey="Failed" fill="#dc3545" />
+          <Bar dataKey="Pending" fill={getComputedStyle(document.documentElement).getPropertyValue('--accent-warning').trim() || '#f59e0b'} />
+          <Bar dataKey="Failed" fill={getComputedStyle(document.documentElement).getPropertyValue('--accent-danger').trim() || '#ef4444'} />
         </BarChart>
       </ResponsiveContainer>
       <div className="chart-summary">

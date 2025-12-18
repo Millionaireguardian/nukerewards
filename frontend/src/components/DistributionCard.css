@@ -1,0 +1,58 @@
+.distribution-card {
+  min-width: 320px;
+  padding: 1rem 1.25rem; /* More compact padding */
+  transition: all 0.2s ease;
+}
+
+.distribution-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.distribution-card-datetime-text {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.distribution-card-status {
+  font-weight: 500;
+  color: var(--text-secondary); /* Match statistics color */
+  font-size: 0.875rem;
+}
+
+.distribution-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.distribution-card-datetime {
+  display: flex;
+  align-items: center;
+}
+
+.distribution-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.distribution-detail {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.875rem;
+}
+
+.detail-label {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.detail-value {
+  color: var(--text-secondary); /* Match statistics color - lighter grey */
+  font-weight: 500;
+}
+
+/* Light theme handled by GlassCard component */
+

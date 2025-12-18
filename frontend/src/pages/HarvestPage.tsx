@@ -67,7 +67,7 @@ export function HarvestPage() {
       key: 'eligibleHoldersCount',
       header: 'Eligible',
       accessor: (row) => (
-        <span style={{ color: '#28a745', fontWeight: 600 }}>
+        <span style={{ color: 'var(--accent-success)', fontWeight: 600 }}>
           {row.eligibleHoldersCount.toLocaleString()}
         </span>
       ),
@@ -85,7 +85,7 @@ export function HarvestPage() {
       key: 'blacklistedHoldersCount',
       header: 'Blacklisted',
       accessor: (row) => (
-        <span style={{ color: '#dc3545' }}>{row.blacklistedHoldersCount.toLocaleString()}</span>
+        <span style={{ color: 'var(--accent-danger)' }}>{row.blacklistedHoldersCount.toLocaleString()}</span>
       ),
       sortable: true,
       sortFn: (a, b) => a.blacklistedHoldersCount - b.blacklistedHoldersCount,
@@ -94,7 +94,7 @@ export function HarvestPage() {
       key: 'totalSOLDistributed',
       header: 'Total SOL',
       accessor: (row) => (
-        <span style={{ color: '#4a90e2', fontWeight: 600 }}>
+        <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
           {(row.totalSOLDistributed || 0).toFixed(6)} SOL
         </span>
       ),

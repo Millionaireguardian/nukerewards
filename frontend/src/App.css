@@ -1,10 +1,12 @@
-/* App-level styles */
 .app {
   min-height: 100vh;
-  background: #f5f5f5;
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color var(--transition-base), color var(--transition-base);
 }
 
-#root {
-  width: 100%;
-  min-height: 100vh;
+/* Smooth page transitions */
+.app > * {
+  animation: fadeIn var(--transition-base);
 }

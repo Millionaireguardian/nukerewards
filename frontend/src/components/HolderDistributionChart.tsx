@@ -29,21 +29,28 @@ export function HolderDistributionChart() {
     return <div className="chart-loading">Loading chart data...</div>;
   }
 
+  // Use CSS variables for theme-aware colors
+  const getThemeColor = (colorName: string) => {
+    const root = document.documentElement;
+    const computedStyle = getComputedStyle(root);
+    return computedStyle.getPropertyValue(`--accent-${colorName}`).trim() || '#3b82f6';
+  };
+
   const chartData = [
     {
       name: 'Eligible',
       value: data.statistics.eligibleHolders || 0,
-      color: '#28a745',
+      color: getThemeColor('success'),
     },
     {
       name: 'Excluded',
       value: data.statistics.excludedHolders || 0,
-      color: '#ffc107',
+      color: getThemeColor('warning'),
     },
     {
       name: 'Blacklisted',
       value: data.statistics.blacklistedHolders || 0,
-      color: '#dc3545',
+      color: getThemeColor('danger'),
     },
   ].filter(item => item.value > 0);
 

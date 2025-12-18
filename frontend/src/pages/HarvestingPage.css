@@ -1,0 +1,114 @@
+.harvesting-page {
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
+  margin: 0 auto;
+  min-height: 100vh;
+}
+
+.dashboard-section {
+  margin-bottom: 3rem;
+}
+
+.dashboard-section:first-of-type {
+  margin-top: 1rem;
+}
+
+.dashboard-title {
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-subtitle {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 1rem;
+}
+
+.section-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+.transaction-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tx-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all var(--transition-fast);
+  font-size: 0.875rem;
+}
+
+.tx-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: var(--accent-secondary);
+}
+
+.loading,
+.error-message {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.error-message {
+  color: var(--accent-danger);
+}
+
+/* Light theme adjustments */
+[data-theme='light'] .dashboard-subtitle {
+  color: var(--text-secondary);
+}
+
+[data-theme='light'] .tx-link {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='light'] .tx-link:hover {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+@media (max-width: 768px) {
+  .harvesting-page {
+    padding: 8.85rem 1rem 2rem;
+  }
+
+  /* Stats grid responsive handled above */
+
+  .dashboard-title {
+    font-size: 1.5rem;
+  }
+}

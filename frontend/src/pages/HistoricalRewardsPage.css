@@ -1,27 +1,33 @@
 .historical-rewards-page {
-  padding: 20px;
-  max-width: 1400px;
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
   margin: 0 auto;
+}
+
+.historical-rewards-page .page-header {
+  margin-top: 1rem;
 }
 
 .page-header {
   margin-bottom: 30px;
   padding: 20px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .page-header h2 {
   margin: 0 0 10px 0;
-  font-size: 28px;
-  color: #333;
+  font-size: 1.75rem;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .page-subtitle {
   margin: 0;
-  color: #666;
-  font-size: 16px;
+  color: var(--text-secondary);
+  font-size: 1rem;
 }
 
 .chart-controls {
@@ -34,17 +40,18 @@
 
 .time-range-select {
   padding: 10px 15px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
-  background: #fff;
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .chart-type-toggle {
   display: flex;
   gap: 5px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -52,26 +59,28 @@
 .chart-type-toggle button {
   padding: 10px 20px;
   border: none;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 0.875rem;
   transition: all 0.2s;
+  color: var(--text-primary);
 }
 
 .chart-type-toggle button:hover {
-  background: #f5f5f5;
+  background: var(--bg-card-hover);
 }
 
 .chart-type-toggle button.active {
-  background: #4a90e2;
-  color: #fff;
+  background: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 .chart-container {
-  background: #fff;
+  background: var(--bg-card);
   padding: 20px;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
   margin-bottom: 20px;
 }
 
@@ -80,24 +89,26 @@
 .chart-no-data {
   padding: 40px;
   text-align: center;
-  color: #666;
-  font-size: 14px;
-  background: #fff;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .chart-error {
-  color: #dc3545;
+  color: var(--accent-danger);
 }
 
 .chart-summary {
   display: flex;
   gap: 20px;
   padding: 20px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
   flex-wrap: wrap;
 }
 
@@ -108,21 +119,21 @@
 }
 
 .summary-label {
-  font-size: 12px;
-  color: #666;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
   text-transform: uppercase;
   font-weight: 500;
 }
 
 .summary-value {
-  font-size: 16px;
-  font-weight: 700;
-  color: #333;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 @media (max-width: 768px) {
   .historical-rewards-page {
-    padding: 10px;
+    padding: 8.85rem 1rem 2rem;
   }
 
   .chart-controls {

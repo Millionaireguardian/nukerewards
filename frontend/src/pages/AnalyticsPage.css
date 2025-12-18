@@ -1,36 +1,42 @@
 .analytics-page {
-  padding: 20px;
-  max-width: 1400px;
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
   margin: 0 auto;
+}
+
+.analytics-page .page-header {
+  margin-top: 1rem;
 }
 
 .page-header {
   margin-bottom: 30px;
   padding: 20px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .page-header h2 {
   margin: 0 0 10px 0;
-  font-size: 28px;
-  color: #333;
+  font-size: 1.75rem;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .page-subtitle {
   margin: 0;
-  color: #666;
-  font-size: 16px;
+  color: var(--text-secondary);
+  font-size: 1rem;
 }
 
 @media (max-width: 768px) {
   .analytics-page {
-    padding: 10px;
+    padding: 8.85rem 1rem 2rem;
   }
 
   .page-header h2 {
-    font-size: 24px;
+    font-size: 1.5rem;
   }
 }
 

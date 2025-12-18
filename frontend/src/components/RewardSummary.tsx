@@ -7,14 +7,13 @@ interface RewardSummaryProps {
   refreshInterval?: number;
 }
 
-export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
+export function RewardSummary({ refreshInterval = 300000 }: RewardSummaryProps) {
   const [data, setData] = useState<RewardsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadRewards = async () => {
     try {
-      setLoading(true);
       setError(null);
       const response = await fetchRewards();
       setData(response);
@@ -40,28 +39,6 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
     return () => clearInterval(interval);
   }, [refreshInterval]);
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'Never';
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getTimeUntilNext = (nextRun: string | null) => {
-    if (!nextRun) return 'N/A';
-    const now = new Date().getTime();
-    const next = new Date(nextRun).getTime();
-    const diff = next - now;
-    
-    if (diff <= 0) return 'Due now';
-    
-    const minutes = Math.floor(diff / 60000);
-    const seconds = Math.floor((diff % 60000) / 1000);
-    
-    if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    }
-    return `${seconds}s`;
-  };
-
   if (loading) {
     return (
       <div className="reward-summary-container">
@@ -86,107 +63,44 @@ export function RewardSummary({ refreshInterval = 60000 }: RewardSummaryProps) {
     );
   }
 
-  const stats = data.statistics;
-  const tokenPrice = data.tokenPrice || { sol: null, usd: null, source: null };
-  const dex = data.dex || null;
+  const tax = data.tax || {
+    totalNukeHarvested: '0',
+    totalNukeSold: '0',
+    totalSolDistributed: '0',
+    totalSolToTreasury: '0',
+    lastTaxDistribution: null,
+    lastSwapTx: null,
+    lastDistributionTx: null,
+    distributionCount: 0,
+  };
 
   return (
     <div className="reward-summary-container">
-      <h2>Reward Summary</h2>
-      
-      <div className="summary-grid">
-        <div className="summary-card">
-          <div className="card-label">Scheduler Status</div>
-          <div className="card-value">
-            <span className={data.isRunning ? 'status-running' : 'status-idle'}>
-              {data.isRunning ? 'Running' : 'Idle'}
-            </span>
+      <div className="tax-section">
+        <div className="tax-grid">
+          <div className="tax-card highlight">
+            <div className="tax-label">NUKE Harvested</div>
+            <div className="tax-value">
+              {(() => {
+                const nuke = parseFloat(tax.totalNukeHarvested || '0');
+                return nuke > 0 ? nuke.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '0';
+              })()}
+            </div>
+            <div className="tax-subtext">Total Collected</div>
           </div>
-        </div>
 
-        <div className="summary-card">
-          <div className="card-label">Last Run</div>
-          <div className="card-value">{formatDate(data.lastRun)}</div>
-        </div>
-
-        <div className="summary-card">
-          <div className="card-label">Next Run</div>
-          <div className="card-value">
-            {formatDate(data.nextRun)}
-            <div className="time-until">({getTimeUntilNext(data.nextRun)})</div>
-          </div>
-        </div>
-        
-        <div className="summary-card">
-          <div className="card-label">Token Price (SOL)</div>
-          <div className="card-value">
-            {tokenPrice.sol !== null && !isNaN(tokenPrice.sol)
-              ? `${tokenPrice.sol.toFixed(8)} SOL`
-              : 'N/A'}
-          </div>
-        </div>
-
-        <div className="summary-card">
-          <div className="card-label">Token Price (USD)</div>
-          <div className="card-value">
-            {tokenPrice.usd !== null && !isNaN(tokenPrice.usd)
-              ? `$${tokenPrice.usd.toFixed(6)}`
-              : 'N/A'}
-          </div>
-        </div>
-
-        <div className="summary-card">
-          <div className="card-label">Price Source</div>
-          <div className="card-value">
-            {tokenPrice.source || (dex?.source === 'raydium' ? 'raydium' : 'Unknown')}
-          </div>
-        </div>
-      </div>
-
-      <div className="statistics-grid">
-        <div className="stat-card">
-          <div className="stat-label">Total Holders</div>
-          <div className="stat-value">{(stats.totalHolders || 0).toLocaleString()}</div>
-        </div>
-
-        <div className="stat-card highlight">
-          <div className="stat-label">Eligible Holders</div>
-          <div className="stat-value stat-eligible">
-            {(stats.eligibleHolders || 0).toLocaleString()}
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Excluded Holders</div>
-          <div className="stat-value">{(stats.excludedHolders || 0).toLocaleString()}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Blacklisted</div>
-          <div className="stat-value">{(stats.blacklistedHolders || 0).toLocaleString()}</div>
-        </div>
-
-        <div className="stat-card highlight">
-          <div className="stat-label">Pending Payouts</div>
-          <div className="stat-value stat-pending">
-            {(stats.pendingPayouts || 0).toLocaleString()}
-          </div>
-        </div>
-
-        <div className="stat-card highlight">
-          <div className="stat-label">Total SOL Distributed</div>
-          <div className="stat-value stat-sol">
-            {(() => {
-              const sol = stats.totalSOLDistributed;
-              if (sol === null || sol === undefined || isNaN(sol)) {
-                return '0.000000 SOL';
-              }
-              return `${Number(sol).toFixed(6)} SOL`;
-            })()}
+          <div className="tax-card highlight">
+            <div className="tax-label">SOL to Holders</div>
+            <div className="tax-value stat-sol">
+              {(() => {
+                const sol = parseFloat(tax.totalSolDistributed || '0') / 1e9;
+                return sol > 0 ? `${sol.toFixed(6)} SOL` : '0.000000 SOL';
+              })()}
+            </div>
+            <div className="tax-subtext">75% Distribution</div>
           </div>
         </div>
       </div>
     </div>
   );
 }
-

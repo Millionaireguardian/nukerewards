@@ -25,9 +25,20 @@ import * as path from 'path';
 /**
  * Tax Distribution Service
  * 
- * Handles 4% transaction tax on NUKE token transfers:
- * - 3% → Sent to Reward wallet (for distribution to holders)
- * - 1% → Sent to Treasury wallet
+ * Handles 4% transaction tax on NUKE token transfers.
+ * 
+ * IMPORTANT: Transfer fees are epoch-gated. The fee will only be enforced when
+ * newerTransferFee.epoch <= currentClusterEpoch. If the epoch is in the future,
+ * no fees will be collected regardless of transfer type (wallet-to-wallet or DEX swaps).
+ *
+ * When active, fees are collected on ALL Token-2022 transfers:
+ * - Wallet-to-wallet transfers
+ * - DEX swaps (Raydium, etc.)
+ * - Program-to-program transfers
+ *
+ * Distribution:
+ * - 75% of swapped SOL → Distributed to eligible holders
+ * - 25% of swapped SOL → Sent to Treasury wallet
  * 
  * All amounts are in token units (raw, with decimals)
  */

@@ -3,6 +3,7 @@ import { fetchHolders } from '../services/api';
 import type { Holder } from '../types/api';
 import { Table } from '../components/Table';
 import type { TableColumn } from '../components/Table';
+import { StatCard } from '../components/StatCard';
 import './HoldersPage.css';
 
 export function HoldersPage() {
@@ -25,7 +26,7 @@ export function HoldersPage() {
     };
 
     loadData();
-    const interval = setInterval(loadData, 60000);
+    const interval = setInterval(loadData, 300000);
     return () => clearInterval(interval);
   }, []);
 
@@ -133,36 +134,29 @@ export function HoldersPage() {
 
   return (
     <div className="holders-page">
-      <div className="page-header">
-        <h2>Token Holders</h2>
-        <p className="page-subtitle">All NUKE token holders with eligibility status</p>
-      </div>
+      <section className="dashboard-section">
+        <h2 className="section-title">Holder Summary</h2>
+        <div className="stats-grid">
+          <StatCard
+            label="Total Holders"
+            value={total.toLocaleString()}
+          />
+          <StatCard
+            label="Eligible"
+            value={holders.filter((h) => h.eligibilityStatus === 'eligible').length.toLocaleString()}
+          />
+          <StatCard
+            label="Excluded"
+            value={holders.filter((h) => h.eligibilityStatus === 'excluded').length.toLocaleString()}
+          />
+          <StatCard
+            label="Blacklisted"
+            value={holders.filter((h) => h.eligibilityStatus === 'blacklisted').length.toLocaleString()}
+          />
+        </div>
+      </section>
 
-      <div className="holders-summary">
-        <div className="summary-stat">
-          <span className="stat-label">Total Holders:</span>
-          <span className="stat-value">{total}</span>
-        </div>
-        <div className="summary-stat highlight">
-          <span className="stat-label">Eligible:</span>
-          <span className="stat-value stat-eligible">
-            {holders.filter((h) => h.eligibilityStatus === 'eligible').length}
-          </span>
-        </div>
-        <div className="summary-stat">
-          <span className="stat-label">Excluded:</span>
-          <span className="stat-value">
-            {holders.filter((h) => h.eligibilityStatus === 'excluded').length}
-          </span>
-        </div>
-        <div className="summary-stat">
-          <span className="stat-label">Blacklisted:</span>
-          <span className="stat-value stat-blacklisted">
-            {holders.filter((h) => h.eligibilityStatus === 'blacklisted').length}
-          </span>
-        </div>
-      </div>
-
+      <section className="dashboard-section">
       <Table
         data={holders}
         columns={columns}
@@ -185,6 +179,7 @@ export function HoldersPage() {
         loading={loading}
         emptyMessage="No holders found"
       />
+      </section>
     </div>
   );
 }

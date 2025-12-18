@@ -518,4 +518,46 @@ export async function exportPayouts(params?: {
   }
 }
 
+/**
+ * Fetch 24h DEX volume from Birdeye API or Raydium
+ * Falls back to showing "N/A" if unavailable
+ */
+export async function fetchDexVolume24h(tokenAddress: string): Promise<number | null> {
+  try {
+    // Try Birdeye API first (requires API key)
+    const birdeyeApiKey = import.meta.env.VITE_BIRDEYE_API_KEY;
+    if (birdeyeApiKey) {
+      try {
+        const response = await axios.get(`https://public-api.birdeye.so/defi/token_overview`, {
+          params: {
+            address: tokenAddress,
+          },
+          headers: {
+            'X-API-KEY': birdeyeApiKey,
+          },
+          timeout: 10000,
+        });
+
+        if (response.data?.data?.volume24h) {
+          return response.data.data.volume24h;
+        }
+      } catch (birdeyeError) {
+        if (isDevelopment) {
+          console.warn('[API] Birdeye API failed, trying alternative:', birdeyeError);
+        }
+      }
+    }
+
+    // Fallback: Try Raydium API (if pool ID is available)
+    // Note: Raydium API may not provide 24h volume directly
+    // This is a placeholder for future implementation
+    return null;
+  } catch (error) {
+    if (isDevelopment) {
+      console.warn('[API] Could not fetch DEX volume 24h:', error);
+    }
+    return null;
+  }
+}
+
 export default apiClient;

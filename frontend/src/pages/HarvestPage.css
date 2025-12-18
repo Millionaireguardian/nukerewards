@@ -1,27 +1,33 @@
 .harvest-page {
-  padding: 20px;
-  max-width: 1400px;
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
   margin: 0 auto;
+}
+
+.harvest-page .page-header {
+  margin-top: 1rem;
 }
 
 .page-header {
   margin-bottom: 30px;
   padding: 20px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .page-header h2 {
   margin: 0 0 10px 0;
-  font-size: 28px;
-  color: #333;
+  font-size: 1.75rem;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .page-subtitle {
   margin: 0;
-  color: #666;
-  font-size: 16px;
+  color: var(--text-secondary);
+  font-size: 1rem;
 }
 
 .harvest-summary {
@@ -33,27 +39,27 @@
 
 .summary-card {
   padding: 15px;
-  background: #f9f9f9;
+  background: var(--bg-card);
   border-radius: 6px;
-  border: 1px solid #eee;
+  border: 1px solid var(--border-color);
 }
 
 .summary-card.highlight {
-  background: #e8f4f8;
-  border-color: #4a90e2;
+  background: var(--bg-card-hover);
+  border-color: var(--accent-primary);
 }
 
 .card-label {
-  font-size: 12px;
-  color: #666;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
   text-transform: uppercase;
   margin-bottom: 8px;
   font-weight: 500;
 }
 
 .card-value {
-  font-size: 18px;
-  color: #333;
+  font-size: 1.125rem;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
@@ -65,18 +71,18 @@
 
 .export-excel-btn {
   padding: 10px 20px;
-  background: #28a745;
-  color: #fff;
+  background: var(--accent-success);
+  color: var(--text-primary);
   border: none;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .export-excel-btn:hover {
-  background: #218838;
+  opacity: 0.9;
 }
 
 .filters-section {
@@ -89,26 +95,29 @@
 
 .filter-date {
   padding: 8px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   min-width: 150px;
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .clear-filters-btn {
   padding: 8px 16px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
   transition: all 0.2s;
 }
 
 .clear-filters-btn:hover {
-  background: #f5f5f5;
-  border-color: #dc3545;
-  color: #dc3545;
+  background: var(--bg-card-hover);
+  border-color: var(--accent-danger);
+  color: var(--accent-danger);
 }
 
 .pagination-controls {
@@ -118,24 +127,26 @@
   gap: 15px;
   margin-top: 20px;
   padding: 15px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .pagination-btn {
   padding: 8px 16px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
   transition: all 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: #f5f5f5;
-  border-color: #4a90e2;
+  background: var(--bg-card-hover);
+  border-color: var(--accent-primary);
 }
 
 .pagination-btn:disabled {
@@ -144,17 +155,17 @@
 }
 
 .pagination-info {
-  font-size: 14px;
-  color: #666;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {
   .harvest-page {
-    padding: 10px;
+    padding: 8.85rem 1rem 2rem;
   }
 
   .page-header h2 {
-    font-size: 24px;
+    font-size: 1.5rem;
   }
 
   .harvest-summary {

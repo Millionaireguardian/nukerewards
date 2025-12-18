@@ -26,6 +26,20 @@ export interface RewardStatistics {
   totalSOLDistributed: number;
 }
 
+export interface TaxStatistics {
+  totalTaxCollected: string;
+  totalNukeHarvested: string;
+  totalNukeSold: string;
+  totalRewardAmount: string;
+  totalTreasuryAmount: string;
+  totalSolDistributed: string;
+  totalSolToTreasury: string;
+  lastTaxDistribution: string | null;
+  lastSwapTx: string | null;
+  lastDistributionTx: string | null;
+  distributionCount: number;
+}
+
 export interface RewardsResponse {
   lastRun: string | null;
   nextRun: string | null;
@@ -42,6 +56,7 @@ export interface RewardsResponse {
     source: string | null;
     updatedAt: string | null;
   } | null;
+  tax?: TaxStatistics;
   filtered: {
     pubkey: string;
     eligible: boolean;

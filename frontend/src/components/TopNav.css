@@ -1,0 +1,180 @@
+.top-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.95);
+}
+
+.top-nav-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  height: 5rem;
+}
+
+.top-nav-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem; /* small spacing between logo and search */
+  flex: 1;
+  min-width: 0;
+}
+
+.top-nav-logo {
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+}
+
+.top-nav-search {
+  flex: 1;
+  max-width: 32rem;
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.75rem 1.25rem;
+  padding-right: 3rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  font-size: 1rem;
+  transition: all var(--transition-fast);
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.search-loading {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.search-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.top-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.icon-button svg {
+  width: 24px;
+  height: 24px;
+}
+
+.icon-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.connect-wallet-button {
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: none;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+
+.connect-wallet-button:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.connect-wallet-button.connected {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.connect-wallet-button.connected:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Light theme adjustments */
+[data-theme='light'] .top-nav {
+  background: rgba(255, 255, 255, 0.98);
+}
+
+[data-theme='light'] .search-input {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: var(--text-primary);
+}
+
+[data-theme='light'] .search-input:focus {
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='light'] .icon-button {
+  color: var(--text-secondary);
+}
+
+[data-theme='light'] .icon-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary);
+}
+
+[data-theme='light'] .connect-wallet-button {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+}
+

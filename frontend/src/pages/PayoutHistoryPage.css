@@ -1,7 +1,11 @@
 .payout-history-page {
-  padding: 20px;
-  max-width: 1400px;
+  padding: 8.85rem 1.5rem 2rem;
+  max-width: 1280px;
   margin: 0 auto;
+}
+
+.payout-history-page .page-header {
+  margin-top: 1rem;
 }
 
 .page-header {
@@ -14,14 +18,15 @@
 
 .page-header h2 {
   margin: 0 0 10px 0;
-  font-size: 28px;
-  color: #333;
+  font-size: 1.75rem;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .page-subtitle {
   margin: 0;
-  color: #666;
-  font-size: 16px;
+  color: var(--text-secondary);
+  font-size: 1rem;
 }
 
 .page-summary {
@@ -29,9 +34,10 @@
   gap: 20px;
   margin-bottom: 20px;
   padding: 15px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
   flex-wrap: wrap;
 }
 
@@ -42,27 +48,27 @@
 }
 
 .stat-label {
-  font-size: 14px;
-  color: #666;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .stat-value {
-  font-size: 18px;
-  font-weight: 700;
-  color: #333;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .stat-success {
-  color: #28a745;
+  color: var(--accent-success);
 }
 
 .stat-failed {
-  color: #dc3545;
+  color: var(--accent-danger);
 }
 
 .stat-pending {
-  color: #ffc107;
+  color: var(--accent-warning);
 }
 
 .export-toolbar {
@@ -73,18 +79,18 @@
 
 .export-excel-btn {
   padding: 10px 20px;
-  background: #28a745;
-  color: #fff;
+  background: var(--accent-success);
+  color: var(--text-primary);
   border: none;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .export-excel-btn:hover {
-  background: #218838;
+  opacity: 0.9;
 }
 
 .filters-section {
@@ -98,9 +104,11 @@
 .filter-select,
 .filter-date {
   padding: 8px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
+  background: var(--bg-card);
+  color: var(--text-primary);
 }
 
 .filter-input {
@@ -123,24 +131,26 @@
   gap: 15px;
   margin-top: 20px;
   padding: 15px;
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
 }
 
 .pagination-btn {
   padding: 8px 16px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
   transition: all 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: #f5f5f5;
-  border-color: #4a90e2;
+  background: var(--bg-card-hover);
+  border-color: var(--accent-primary);
 }
 
 .pagination-btn:disabled {
@@ -149,56 +159,57 @@
 }
 
 .pagination-info {
-  font-size: 14px;
-  color: #666;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
 }
 
 .pubkey-cell {
   font-family: monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
+  color: var(--text-primary);
 }
 
 .tx-signature {
   font-family: monospace;
-  font-size: 11px;
-  color: #4a90e2;
+  font-size: 0.6875rem;
+  color: var(--accent-primary);
   cursor: pointer;
 }
 
 .status-badge {
   padding: 4px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
 }
 
 .status-success {
-  background: #d4edda;
-  color: #155724;
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--accent-success);
 }
 
 .status-pending {
-  background: #fff3cd;
-  color: #856404;
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--accent-warning);
 }
 
 .status-failed {
-  background: #f8d7da;
-  color: #721c24;
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--accent-danger);
 }
 
 .error-message {
   padding: 20px;
-  background: #f8d7da;
-  color: #721c24;
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--accent-danger);
   border-radius: 8px;
   text-align: center;
 }
 
 @media (max-width: 768px) {
   .payout-history-page {
-    padding: 10px;
+    padding: 8.85rem 1rem 2rem;
   }
 
   .page-summary {

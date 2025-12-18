@@ -9,7 +9,7 @@ interface PayoutsTableProps {
   refreshInterval?: number;
 }
 
-export function PayoutsTable({ refreshInterval = 60000 }: PayoutsTableProps) {
+export function PayoutsTable({ refreshInterval = 300000 }: PayoutsTableProps) {
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState({
@@ -20,8 +20,6 @@ export function PayoutsTable({ refreshInterval = 60000 }: PayoutsTableProps) {
 
   const loadPayouts = async () => {
     try {
-      setLoading(true);
-      
       const response = await fetchPayouts({ limit: 1000 });
       
       setPayouts(response.payouts || []);

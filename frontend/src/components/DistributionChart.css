@@ -1,0 +1,86 @@
+.distribution-chart-container {
+  position: relative;
+}
+
+.distribution-chart-wrapper {
+  position: relative;
+  width: 100%;
+  height: 300px;
+  margin-bottom: var(--spacing-lg);
+}
+
+.distribution-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.distribution-total {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.distribution-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.distribution-breakdown {
+  display: flex;
+  justify-content: center;
+  gap: var(--spacing-lg);
+  flex-wrap: wrap;
+}
+
+.breakdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.breakdown-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.breakdown-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.breakdown-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.breakdown-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.chart-loading,
+.chart-no-data {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+  .distribution-breakdown {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
