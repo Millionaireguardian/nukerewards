@@ -19,7 +19,7 @@ const router = Router();
  * GET /dashboard/historical/rewards
  * Get historical reward cycles with filters and pagination
  */
-router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
+router.get('/historical/rewards', async (req: Request, res: Response): Promise<void> => {
   try {
     const startTime = Date.now();
     const startDate = req.query.startDate as string | undefined;
@@ -85,7 +85,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
  * GET /dashboard/historical/payouts
  * Get historical payout records with filters and pagination
  */
-router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
+router.get('/historical/payouts', async (req: Request, res: Response): Promise<void> => {
   try {
     const startTime = Date.now();
     const startDate = req.query.startDate as string | undefined;
@@ -160,7 +160,7 @@ router.get('/payouts', async (req: Request, res: Response): Promise<void> => {
  *   - format: 'json' (default) or 'excel' (file download)
  *   - startDate, endDate: date filters
  */
-router.get('/export/rewards', async (req: Request, res: Response): Promise<void> => {
+router.get('/historical/export/rewards', async (req: Request, res: Response): Promise<void> => {
   try {
     const startTime = Date.now();
     const startDate = req.query.startDate as string | undefined;
@@ -241,7 +241,7 @@ router.get('/export/rewards', async (req: Request, res: Response): Promise<void>
  *   - format: 'json' (default) or 'excel' (file download)
  *   - startDate, endDate, pubkey, status: filters
  */
-router.get('/export/payouts', async (req: Request, res: Response): Promise<void> => {
+router.get('/historical/export/payouts', async (req: Request, res: Response): Promise<void> => {
   try {
     const startTime = Date.now();
     const startDate = req.query.startDate as string | undefined;

@@ -180,7 +180,12 @@ export function suppressSolanaRetryMessages(): void {
     return; // Already suppressed
   }
 
+  // Store original functions
   originalConsoleLog = console.log;
+  const originalConsoleWarn = console.warn;
+  const originalConsoleError = console.error;
+
+  // Suppress retry messages in console.log
   console.log = (...args: any[]) => {
     const message = args.join(' ');
     
@@ -199,6 +204,40 @@ export function suppressSolanaRetryMessages(): void {
     if (originalConsoleLog) {
       originalConsoleLog(...args);
     }
+  };
+
+  // Also suppress in console.warn (Solana might use this)
+  console.warn = (...args: any[]) => {
+    const message = args.join(' ');
+    
+    if (message.includes('Server responded with 429') && message.includes('Retrying after')) {
+      retryMessageCount++;
+      if (retryMessageCount <= MAX_RETRY_MESSAGES && originalConsoleLog) {
+        originalConsoleLog(...args);
+      } else if (retryMessageCount === MAX_RETRY_MESSAGES + 1 && originalConsoleLog) {
+        originalConsoleLog('[Solana] Suppressing further 429 retry messages (logged', MAX_RETRY_MESSAGES, 'times)');
+      }
+      return;
+    }
+
+    originalConsoleWarn(...args);
+  };
+
+  // Also suppress in console.error (just in case)
+  console.error = (...args: any[]) => {
+    const message = args.join(' ');
+    
+    if (message.includes('Server responded with 429') && message.includes('Retrying after')) {
+      retryMessageCount++;
+      if (retryMessageCount <= MAX_RETRY_MESSAGES && originalConsoleLog) {
+        originalConsoleLog(...args);
+      } else if (retryMessageCount === MAX_RETRY_MESSAGES + 1 && originalConsoleLog) {
+        originalConsoleLog('[Solana] Suppressing further 429 retry messages (logged', MAX_RETRY_MESSAGES, 'times)');
+      }
+      return;
+    }
+
+    originalConsoleError(...args);
   };
 }
 
