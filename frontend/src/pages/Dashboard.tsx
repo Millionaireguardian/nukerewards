@@ -324,40 +324,8 @@ export function Dashboard() {
                 )}
               </>
             ) : (
-              <div className="distribution-grid">
-                <DistributionCard
-                  item={{
-                    date: '2025-01-01',
-                    time: '12:00 PM EST',
-                    status: 'Completed',
-                    harvestedNUKE: 12345.67,
-                    distributedSOL: 9.259258,
-                    epochNumber: 1,
-                  }}
-                  rewardWalletAddress={rewardWalletAddress}
-                />
-                <DistributionCard
-                  item={{
-                    date: '2025-01-02',
-                    time: '3:30 PM EST',
-                    status: 'Completed',
-                    harvestedNUKE: 8123.45,
-                    distributedSOL: 6.092837,
-                    epochNumber: 2,
-                  }}
-                  rewardWalletAddress={rewardWalletAddress}
-                />
-                <DistributionCard
-                  item={{
-                    date: '2025-01-03',
-                    time: '6:45 PM EST',
-                    status: 'Failed',
-                    harvestedNUKE: 0,
-                    distributedSOL: 0,
-                    epochNumber: 3,
-                  }}
-                  rewardWalletAddress={rewardWalletAddress}
-                />
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {isLoadingHistorical ? 'Loading distribution history...' : 'No distribution history available'}
               </div>
             )}
           </div>
@@ -373,23 +341,31 @@ export function Dashboard() {
           <div className="lp-summary-stats">
             <StatCard
               label="Total Liquidity"
-              value={liquiditySummaryData 
-                ? `$${(liquiditySummaryData.totalLiquidityUSD / 1000000).toFixed(1)}M`
-                : 'N/A'}
+              value={liquiditySummaryData && liquiditySummaryData.totalLiquidityUSD > 0
+                ? liquiditySummaryData.totalLiquidityUSD >= 1000000
+                  ? `$${(liquiditySummaryData.totalLiquidityUSD / 1000000).toFixed(1)}M`
+                  : `$${(liquiditySummaryData.totalLiquidityUSD / 1000).toFixed(1)}K`
+                : isLoadingLiquiditySummary ? 'Loading...' : 'N/A'}
             />
             <StatCard
               label="24H Volume"
-              value={liquiditySummaryData
-                ? `$${(liquiditySummaryData.volume24hUSD / 1000000).toFixed(1)}M`
-                : 'N/A'}
+              value={liquiditySummaryData && liquiditySummaryData.volume24hUSD > 0
+                ? liquiditySummaryData.volume24hUSD >= 1000000
+                  ? `$${(liquiditySummaryData.volume24hUSD / 1000000).toFixed(1)}M`
+                  : `$${(liquiditySummaryData.volume24hUSD / 1000).toFixed(1)}K`
+                : isLoadingLiquiditySummary ? 'Loading...' : 'N/A'}
             />
             <StatCard
               label="Active Pools"
-              value={liquiditySummaryData?.activePools?.toLocaleString() || '0'}
+              value={liquiditySummaryData 
+                ? liquiditySummaryData.activePools.toLocaleString()
+                : isLoadingLiquiditySummary ? 'Loading...' : '0'}
             />
             <StatCard
               label="Treasury Pools"
-              value={liquiditySummaryData?.treasuryPools?.toLocaleString() || '0'}
+              value={liquiditySummaryData 
+                ? liquiditySummaryData.treasuryPools.toLocaleString()
+                : isLoadingLiquiditySummary ? 'Loading...' : '0'}
             />
           </div>
 
@@ -406,7 +382,7 @@ export function Dashboard() {
               </div>
             ) : (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                No liquidity pools data available
+                {isLoadingLiquidityPools ? 'Loading liquidity pools...' : 'No liquidity pools data available'}
               </div>
             )}
           </div>

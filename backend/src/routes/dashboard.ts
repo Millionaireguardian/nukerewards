@@ -693,20 +693,20 @@ router.get('/liquidity/summary', async (req: Request, res: Response): Promise<vo
     const startTime = Date.now();
     logger.debug('Dashboard API: GET /dashboard/liquidity/summary');
 
-    // TODO: Implement real liquidity pool data fetching
-    // For now, return placeholder data
-    // This should eventually query Raydium or other DEX APIs
-    
+    const { fetchLiquidityPoolsData } = await import('../services/liquidityService');
+    const { summary } = await fetchLiquidityPoolsData();
+
     const response = {
-      totalLiquidityUSD: 4200000, // Placeholder
-      volume24hUSD: 1100000, // Placeholder
-      activePools: 27, // Placeholder
-      treasuryPools: 18, // Placeholder
+      totalLiquidityUSD: summary.totalLiquidityUSD,
+      volume24hUSD: summary.volume24hUSD,
+      activePools: summary.activePools,
+      treasuryPools: summary.treasuryPools,
     };
 
     const duration = Date.now() - startTime;
     logger.debug('Dashboard API: GET /dashboard/liquidity/summary completed', {
       duration: `${duration}ms`,
+      summary,
     });
 
     res.status(200).json(response);
@@ -733,29 +733,17 @@ router.get('/liquidity/pools', async (req: Request, res: Response): Promise<void
     const startTime = Date.now();
     logger.debug('Dashboard API: GET /dashboard/liquidity/pools');
 
-    // TODO: Implement real liquidity pool data fetching
-    // For now, return placeholder data
-    // This should eventually query Raydium or other DEX APIs
-    
+    const { fetchLiquidityPoolsData } = await import('../services/liquidityService');
+    const { pools } = await fetchLiquidityPoolsData();
+
     const response = {
-      pools: [
-        {
-          pair: 'NUKE / SOL',
-          liquidityUSD: 482300, // Placeholder
-          volume24hUSD: 124800, // Placeholder
-        },
-        {
-          pair: 'NUKE / USDC',
-          liquidityUSD: 310500, // Placeholder
-          volume24hUSD: 98200, // Placeholder
-        },
-      ],
+      pools,
     };
 
     const duration = Date.now() - startTime;
     logger.debug('Dashboard API: GET /dashboard/liquidity/pools completed', {
       duration: `${duration}ms`,
-      count: response.pools.length,
+      count: pools.length,
     });
 
     res.status(200).json(response);

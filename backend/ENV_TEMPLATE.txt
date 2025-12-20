@@ -18,8 +18,10 @@ TOKEN_MINT=CzPWFT9ezPy53mQUj48T17Jm4ep7sPcKwjpWw9tACTyq
 ADMIN_WALLET_JSON=[YOUR_ADMIN_WALLET_JSON_HERE]
 
 # Raydium DEX Configuration (optional, but recommended)
-# NUKE/dwSOL Cpmm pool on devnet
+# NUKE/SOL Cpmm pool on devnet
 RAYDIUM_POOL_ID=GFPwg4JVyRbsmNSvPGd8Wi3vvR3WVyChkjY56U7FKrc9
+# NUKE/USDC pool on devnet
+RAYDIUM_POOL_ID_USDC=14nA4A3DMMXrpPBhrX1sLTG4dSQKCwPHnoe3k4P1nZbx
 
 # Reward Configuration
 TOTAL_REWARD_POOL_SOL=1.0
