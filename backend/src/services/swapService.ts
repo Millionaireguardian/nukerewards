@@ -46,6 +46,19 @@ function getRewardWallet(): Keypair {
   return loadKeypairFromEnv('REWARD_WALLET_PRIVATE_KEY_JSON');
 }
 
+// Types for Raydium API response
+interface RaydiumApiPoolInfo {
+  mintA?: { address: string };
+  mintB?: { address: string };
+  baseMint?: string;
+  quoteMint?: string;
+}
+
+interface RaydiumApiResponse {
+  success?: boolean;
+  data?: RaydiumApiPoolInfo[];
+}
+
 /**
  * Fetch Raydium pool state to get vault addresses
  * Uses Raydium API first, falls back to direct account parsing
@@ -69,17 +82,7 @@ async function getRaydiumPoolState(poolId: PublicKey): Promise<{
       });
 
       if (response.ok) {
-        interface RaydiumApiPoolInfo {
-          mintA?: { address: string };
-          mintB?: { address: string };
-          baseMint?: string;
-          quoteMint?: string;
-        }
-        interface RaydiumApiResponse {
-          success?: boolean;
-          data?: RaydiumApiPoolInfo[];
-        }
-        const data = await response.json() as RaydiumApiResponse;
+        const data: RaydiumApiResponse = await response.json() as RaydiumApiResponse;
         if (data.success && data.data && data.data.length > 0) {
           const poolInfo = data.data[0];
           
