@@ -374,6 +374,7 @@ export class TaxService {
       // because withheld fees are stored separately and accounts with fees may have zero balance
       let totalWithheldInAccounts = 0n;
       let accountsWithWithheld = 0;
+      const accountsWithWithheldList: PublicKey[] = []; // Collect accounts with withheld fees
       
       try {
         const { getTransferFeeAmount, unpackAccount } = await import('@solana/spl-token');
@@ -417,6 +418,7 @@ export class TaxService {
             if (transferFeeAmount && transferFeeAmount.withheldAmount > 0n) {
               totalWithheldInAccounts += transferFeeAmount.withheldAmount;
               accountsWithWithheld++;
+              accountsWithWithheldList.push(pubkey); // Collect account address
               const withheldHuman = (Number(transferFeeAmount.withheldAmount) / Math.pow(10, decimals)).toFixed(6);
               logger.debug('Token account has withheld fees', {
                 account: pubkey.toBase58(),
@@ -450,10 +452,11 @@ export class TaxService {
         // Continue anyway - harvest might still work
       }
 
-      // Step 4: Always attempt harvest (even if scan found nothing)
-      // The scan might miss accounts, or new fees might have been collected
-      // Empty sources array = harvest from ALL token accounts
-      const emptySources: PublicKey[] = []; // Empty array = harvest from ALL accounts
+      // Step 4: Harvest from accounts with withheld fees
+      // Use explicit list of accounts (more reliable than empty array)
+      const harvestSources = accountsWithWithheldList.length > 0 
+        ? accountsWithWithheldList 
+        : []; // Fallback to empty array if no accounts found (shouldn't happen if scan worked)
       
       // Log what we're about to do
       const totalAvailable = totalWithheldInAccounts + mintWithheldAmount;
@@ -462,6 +465,7 @@ export class TaxService {
           totalWithheldInAccounts: totalWithheldInAccounts.toString(),
           mintWithheldAmount: mintWithheldAmount.toString(),
           totalAvailable: totalAvailable.toString(),
+          accountsToHarvest: harvestSources.length,
         });
       } else {
         logger.info('No withheld tokens detected in scan, but attempting harvest anyway', {
@@ -471,13 +475,21 @@ export class TaxService {
         });
       }
       
-      // Always attempt harvest - it will harvest from ALL token accounts
+      // Attempt harvest from specific accounts (or all if empty array)
       let harvestSignature: string | undefined;
       try {
-        logger.info('Harvesting withheld tokens from ALL token accounts to mint', {
-          sources: 'ALL (empty array = all accounts)',
-          estimatedFromScan: totalWithheldInAccounts.toString(),
-        });
+        if (harvestSources.length > 0) {
+          logger.info('Harvesting withheld tokens from specific token accounts to mint', {
+            sourceAccountsCount: harvestSources.length,
+            sourceAccounts: harvestSources.map(p => p.toBase58()),
+            estimatedFromScan: totalWithheldInAccounts.toString(),
+          });
+        } else {
+          logger.info('Harvesting withheld tokens from ALL token accounts to mint (fallback)', {
+            sources: 'ALL (empty array = all accounts)',
+            estimatedFromScan: totalWithheldInAccounts.toString(),
+          });
+        }
         
         // Get mint withheld amount BEFORE harvest to compare
         const mintAccountBeforeHarvest = await connection.getAccountInfo(tokenMint);
@@ -497,7 +509,7 @@ export class TaxService {
           connection,
           withdrawWallet,
           tokenMint,
-          emptySources, // Empty array = harvest from ALL token accounts
+          harvestSources, // Explicit list of accounts with withheld fees
           { commitment: 'confirmed' }
         );
 
