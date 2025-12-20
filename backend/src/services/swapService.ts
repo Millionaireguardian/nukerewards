@@ -69,7 +69,17 @@ async function getRaydiumPoolState(poolId: PublicKey): Promise<{
       });
 
       if (response.ok) {
-        const data = await response.json();
+        interface RaydiumApiPoolInfo {
+          mintA?: { address: string };
+          mintB?: { address: string };
+          baseMint?: string;
+          quoteMint?: string;
+        }
+        interface RaydiumApiResponse {
+          success?: boolean;
+          data?: RaydiumApiPoolInfo[];
+        }
+        const data = await response.json() as RaydiumApiResponse;
         if (data.success && data.data && data.data.length > 0) {
           const poolInfo = data.data[0];
           
