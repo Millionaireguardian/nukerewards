@@ -56,13 +56,14 @@ function getRewardWallet(): Keypair {
 
 // Types for Raydium API response
 interface RaydiumApiPoolInfo {
+  programId?: string; // Pool's program ID from API
   mintA?: { address: string; decimals?: number; programId?: string };
   mintB?: { address: string; decimals?: number; programId?: string };
   baseMint?: string;
   quoteMint?: string;
   mintAmountA?: number;
   mintAmountB?: number;
-  type?: string; // Pool type: "Standard", "Cpmm", "Clmm", etc.
+  type?: string; // Pool type: "Standard", "Cpmm", "Clmm", etc. (may be undefined)
   vault?: {
     A?: string; // Vault address for mintA
     B?: string; // Vault address for mintB
@@ -82,6 +83,7 @@ interface RaydiumApiResponse {
  */
 async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   poolType: 'Standard' | 'Cpmm';
+  poolProgramId: PublicKey; // Program ID from API response
   mintA: PublicKey;
   mintB: PublicKey;
   reserveA: bigint;
@@ -113,9 +115,27 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
 
   const poolInfo = apiData.data[0];
 
+  // Extract program ID from API response (required for swap instruction)
+  if (!poolInfo.programId) {
+    throw new Error('Pool API response missing programId');
+  }
+  const poolProgramId = new PublicKey(poolInfo.programId);
+
+  // Handle pool type - API may not always return it, default to "Standard" for known pools
+  // Standard AMM v4 pools may not have type field in API response
+  let normalizedType = '';
+  if (poolInfo.type) {
+    normalizedType = poolInfo.type.toLowerCase();
+  } else {
+    // Default to "Standard" if type is undefined (common for Standard AMM v4 pools)
+    logger.warn('Pool type not in API response, defaulting to "Standard"', {
+      poolId: poolId.toBase58(),
+      programId: poolProgramId.toBase58(),
+    });
+    normalizedType = 'standard';
+  }
+
   // Support both Standard AMM (v4) and CPMM pools - reject other types
-  const poolType = poolInfo.type || '';
-  const normalizedType = poolType.toLowerCase();
   if (!['standard', 'cpmm'].includes(normalizedType)) {
     throw new Error(`Unsupported Raydium pool type: "${poolInfo.type}". Only Standard AMM (v4) and CPMM pools are supported.`);
   }
@@ -148,6 +168,7 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
 
   return {
     poolType: normalizedPoolType as 'Standard' | 'Cpmm',
+    poolProgramId, // Program ID from API response
     mintA,
     mintB,
     reserveA,
@@ -192,6 +213,7 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
  */
 function createRaydiumSwapInstruction(
   poolId: PublicKey,
+  poolProgramId: PublicKey, // Pool's program ID from API response
   userSourceTokenAccount: PublicKey,
   userDestinationTokenAccount: PublicKey,
   poolSourceTokenAccount: PublicKey,
@@ -214,7 +236,7 @@ function createRaydiumSwapInstruction(
   const tokenProgramId = sourceTokenProgram; // TOKEN_2022_PROGRAM_ID for NUKE
 
   return new TransactionInstruction({
-    programId: RAYDIUM_AMM_V4_PROGRAM_ID, // Use official Raydium AMM v4 program ID (same for Standard and CPMM)
+    programId: poolProgramId, // Use pool's program ID from API response
     keys: [
       { pubkey: poolId, isSigner: false, isWritable: true },
       { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
@@ -298,9 +320,10 @@ export async function swapNukeToSOL(
     
     logger.info('Pool validated', {
       poolType: poolInfo.poolType,
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
       mintA: poolInfo.mintA.toBase58(),
       mintB: poolInfo.mintB.toBase58(),
-      note: 'Standard AMM (v4) and CPMM use the same swap instruction format',
+      note: 'Using pool program ID from API response',
     });
 
     // Step 4: Determine swap direction and map mints
@@ -483,6 +506,7 @@ export async function swapNukeToSOL(
     logger.info('Swap instruction debug - accounts verification', {
       poolId: poolId.toBase58(),
       poolType: poolInfo.poolType,
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
       tokenProgramId: sourceTokenProgram.toBase58(),
       sourceMint: poolSourceMint.toBase58(),
       destinationMint: poolDestMint.toBase58(),
@@ -576,6 +600,7 @@ export async function swapNukeToSOL(
 
     const swapInstruction = createRaydiumSwapInstruction(
       poolId,
+      poolInfo.poolProgramId, // Pool's program ID from API response
       rewardNukeAccount, // userSourceTokenAccount (NUKE - Token-2022)
       userSolAccount, // userDestinationTokenAccount (WSOL - SPL Token)
       poolSourceVault, // poolSourceTokenAccount (NUKE vault - Token-2022)
