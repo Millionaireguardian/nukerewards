@@ -56,13 +56,17 @@ function getRewardWallet(): Keypair {
 
 // Types for Raydium API response
 interface RaydiumApiPoolInfo {
-  mintA?: { address: string; decimals?: number };
-  mintB?: { address: string; decimals?: number };
+  mintA?: { address: string; decimals?: number; programId?: string };
+  mintB?: { address: string; decimals?: number; programId?: string };
   baseMint?: string;
   quoteMint?: string;
   mintAmountA?: number;
   mintAmountB?: number;
   type?: string; // Pool type: "Standard", "Cpmm", "Clmm", etc.
+  vault?: {
+    A?: string; // Vault address for mintA
+    B?: string; // Vault address for mintB
+  };
 }
 
 interface RaydiumApiResponse {
@@ -71,9 +75,10 @@ interface RaydiumApiResponse {
 }
 
 /**
- * Fetch pool info from Raydium API to validate pool type and get reserves
+ * Fetch pool info from Raydium API to validate pool type, get reserves, and vault addresses
  * Supports both Standard AMM (v4) and CPMM pools - rejects other types (e.g., CLMM)
  * NOTE: Standard and CPMM use the same program ID and instruction format
+ * Uses /pools/key/ids endpoint which includes vault addresses
  */
 async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   poolType: 'Standard' | 'Cpmm';
@@ -83,8 +88,11 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   reserveB: bigint;
   decimalsA: number;
   decimalsB: number;
+  vaultA?: PublicKey; // Vault address for mintA
+  vaultB?: PublicKey; // Vault address for mintB
 }> {
-  const apiUrl = `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolId.toBase58()}`;
+  // Use /pools/key/ids endpoint which includes vault addresses
+  const apiUrl = `https://api-v3-devnet.raydium.io/pools/key/ids?ids=${poolId.toBase58()}`;
   const response = await fetch(apiUrl, {
     method: 'GET',
     headers: {
@@ -125,6 +133,16 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   const reserveA = BigInt(Math.floor(poolInfo.mintAmountA * Math.pow(10, decimalsA)));
   const reserveB = BigInt(Math.floor(poolInfo.mintAmountB * Math.pow(10, decimalsB)));
 
+  // Extract vault addresses from API response if available
+  let vaultA: PublicKey | undefined;
+  let vaultB: PublicKey | undefined;
+  if (poolInfo.vault?.A) {
+    vaultA = new PublicKey(poolInfo.vault.A);
+  }
+  if (poolInfo.vault?.B) {
+    vaultB = new PublicKey(poolInfo.vault.B);
+  }
+
   // Normalize pool type for return (capitalize first letter)
   const normalizedPoolType = normalizedType === 'standard' ? 'Standard' : 'Cpmm';
 
@@ -136,6 +154,8 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     reserveB,
     decimalsA,
     decimalsB,
+    vaultA,
+    vaultB,
   };
 }
 
@@ -321,44 +341,51 @@ export async function swapNukeToSOL(
       destReserve: destReserve.toString(),
     });
 
-    // Step 5: Get pool vault addresses (need to fetch from pool account)
-    // For CPMM pools, vault addresses are in the pool account data
-    const poolAccount = await connection.getAccountInfo(poolId);
-    if (!poolAccount) {
-      throw new Error(`Pool account not found: ${poolId.toBase58()}`);
-    }
-
-    if (poolAccount.data.length < 112) {
-      throw new Error(`Pool account data too short: ${poolAccount.data.length} bytes`);
-    }
-
-    // CPMM pool account layout:
-    // Offset 48-80: tokenAVault (32 bytes)
-    // Offset 80-112: tokenBVault (32 bytes)
-    const tokenAVault = new PublicKey(poolAccount.data.slice(48, 80));
-    const tokenBVault = new PublicKey(poolAccount.data.slice(80, 112));
-
-    // Determine which vault is source and which is destination
-    // Need to check vault mint to determine mapping
+    // Step 5: Get pool vault addresses from API response (more reliable than parsing account data)
     let poolSourceVault: PublicKey;
     let poolDestVault: PublicKey;
-    
-    // Try to determine vault mapping by checking vault account mints
-    try {
-      const vaultAAccount = await getAccount(connection, tokenAVault, 'confirmed', TOKEN_2022_PROGRAM_ID).catch(() => 
-        getAccount(connection, tokenAVault, 'confirmed', TOKEN_PROGRAM_ID)
-      );
-      const vaultBMint = vaultAAccount.mint.equals(poolSourceMint) ? poolSourceMint : poolDestMint;
-      
-      if (vaultAAccount.mint.equals(poolSourceMint)) {
-        poolSourceVault = tokenAVault;
-        poolDestVault = tokenBVault;
+
+    if (poolInfo.vaultA && poolInfo.vaultB) {
+      // Use vault addresses from API response
+      // vaultA corresponds to mintA, vaultB corresponds to mintB
+      if (poolInfo.mintA.equals(poolSourceMint)) {
+        // mintA is source (NUKE), so vaultA is source vault
+        poolSourceVault = poolInfo.vaultA;
+        poolDestVault = poolInfo.vaultB;
       } else {
-        poolSourceVault = tokenBVault;
-        poolDestVault = tokenAVault;
+        // mintB is source (NUKE), so vaultB is source vault
+        poolSourceVault = poolInfo.vaultB;
+        poolDestVault = poolInfo.vaultA;
       }
-    } catch (error) {
-      // Fallback: assume order matches pool info order
+
+      logger.info('Pool vaults from API', {
+        poolSourceVault: poolSourceVault.toBase58(),
+        poolDestVault: poolDestVault.toBase58(),
+        vaultA: poolInfo.vaultA.toBase58(),
+        vaultB: poolInfo.vaultB.toBase58(),
+        mintA: poolInfo.mintA.toBase58(),
+        mintB: poolInfo.mintB.toBase58(),
+        note: 'Using vault addresses from Raydium API response',
+      });
+    } else {
+      // Fallback: Parse vault addresses from pool account data
+      logger.warn('Vault addresses not in API response, falling back to parsing pool account data');
+      const poolAccount = await connection.getAccountInfo(poolId);
+      if (!poolAccount) {
+        throw new Error(`Pool account not found: ${poolId.toBase58()}`);
+      }
+
+      if (poolAccount.data.length < 112) {
+        throw new Error(`Pool account data too short: ${poolAccount.data.length} bytes`);
+      }
+
+      // Pool account layout:
+      // Offset 48-80: tokenAVault (32 bytes)
+      // Offset 80-112: tokenBVault (32 bytes)
+      const tokenAVault = new PublicKey(poolAccount.data.slice(48, 80));
+      const tokenBVault = new PublicKey(poolAccount.data.slice(80, 112));
+
+      // Determine which vault is source and which is destination
       if (poolInfo.mintA.equals(poolSourceMint)) {
         poolSourceVault = tokenAVault;
         poolDestVault = tokenBVault;
@@ -366,12 +393,12 @@ export async function swapNukeToSOL(
         poolSourceVault = tokenBVault;
         poolDestVault = tokenAVault;
       }
-    }
 
-    logger.info('Pool vaults determined', {
-      poolSourceVault: poolSourceVault.toBase58(),
-      poolDestVault: poolDestVault.toBase58(),
-    });
+      logger.info('Pool vaults from account data', {
+        poolSourceVault: poolSourceVault.toBase58(),
+        poolDestVault: poolDestVault.toBase58(),
+      });
+    }
 
     // Step 6: Calculate expected SOL output
     // NOTE: NUKE has 4% transfer fee, so when we send amountNuke, the pool receives amountNuke * 0.96
