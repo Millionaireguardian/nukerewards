@@ -453,14 +453,53 @@ export async function swapNukeToSOL(
     // Create swap instruction using official Raydium AMM v4 program (works for both Standard and CPMM)
     // CRITICAL: Must use TOKEN_2022_PROGRAM_ID for Token-2022 source (NUKE)
     // Raydium supports mixed-program swaps (Token-2022 source, SPL Token destination)
-    logger.info('Swap instruction debug', {
+    logger.info('Swap instruction debug - accounts verification', {
+      poolId: poolId.toBase58(),
+      poolType: poolInfo.poolType,
       tokenProgramId: sourceTokenProgram.toBase58(),
       sourceMint: poolSourceMint.toBase58(),
       destinationMint: poolDestMint.toBase58(),
+      userSourceTokenAccount: rewardNukeAccount.toBase58(),
+      userDestTokenAccount: userSolAccount.toBase58(),
+      poolSourceVault: poolSourceVault.toBase58(),
+      poolDestVault: poolDestVault.toBase58(),
+      rewardWallet: rewardWalletAddress.toBase58(),
       isToken2022Source: NUKE_IS_TOKEN_2022,
       isToken2022Dest: WSOL_IS_TOKEN_2022,
+      amountIn: amountNuke.toString(),
+      minAmountOut: minDestAmount.toString(),
       note: 'Using TOKEN_2022_PROGRAM_ID for Token-2022 source (NUKE)',
     });
+
+    // Verify all accounts exist before building instruction
+    const accountChecks = await Promise.all([
+      connection.getAccountInfo(rewardNukeAccount).catch(() => null),
+      connection.getAccountInfo(userSolAccount).catch(() => null),
+      connection.getAccountInfo(poolSourceVault).catch(() => null),
+      connection.getAccountInfo(poolDestVault).catch(() => null),
+      connection.getAccountInfo(poolId).catch(() => null),
+    ]);
+
+    logger.info('Account existence checks', {
+      rewardNukeAccount: accountChecks[0] ? 'exists' : 'missing',
+      userSolAccount: accountChecks[1] ? 'exists' : 'missing',
+      poolSourceVault: accountChecks[2] ? 'exists' : 'missing',
+      poolDestVault: accountChecks[3] ? 'exists' : 'missing',
+      poolId: accountChecks[4] ? 'exists' : 'missing',
+    });
+
+    if (!accountChecks[0]) {
+      throw new Error(`Reward NUKE account does not exist: ${rewardNukeAccount.toBase58()}`);
+    }
+    if (!accountChecks[2]) {
+      throw new Error(`Pool source vault does not exist: ${poolSourceVault.toBase58()}`);
+    }
+    if (!accountChecks[3]) {
+      throw new Error(`Pool destination vault does not exist: ${poolDestVault.toBase58()}`);
+    }
+    if (!accountChecks[4]) {
+      throw new Error(`Pool account does not exist: ${poolId.toBase58()}`);
+    }
 
     const swapInstruction = createRaydiumSwapInstruction(
       poolId,
