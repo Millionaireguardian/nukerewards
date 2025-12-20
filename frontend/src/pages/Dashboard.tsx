@@ -4,7 +4,7 @@ import { StatCard } from '../components/StatCard';
 import { DistributionCard, type DistributionCardItem } from '../components/DistributionCard';
 import { LiquidityPoolCard, type LiquidityPoolCardItem } from '../components/LiquidityPoolCard';
 import { GlassCard } from '../components/GlassCard';
-import { useRewards, useHistoricalRewards, useDexVolume24h, useLiquidityPools, useLiquiditySummary } from '../hooks/useApiData';
+import { useRewards, useHistoricalRewards, useLiquidityPools, useLiquiditySummary } from '../hooks/useApiData';
 import './Dashboard.css';
 
 export function Dashboard() {
@@ -24,13 +24,8 @@ export function Dashboard() {
     isLoading: isLoadingHistorical,
   } = useHistoricalRewards({ limit: 20 });
 
-  const tokenMint = import.meta.env.VITE_TOKEN_MINT;
-  const {
-    data: dexVolume24h,
-    error: dexVolumeError,
-  } = useDexVolume24h(tokenMint || '', {
-    enabled: !!tokenMint,
-  });
+  // DEX Volume is now fetched from liquidity summary (combined from both pools)
+  // Removed individual Birdeye API call as it's replaced by liquidity pool data
 
   const {
     data: liquidityPoolsData,
@@ -157,7 +152,7 @@ export function Dashboard() {
   }
 
   // Error state (show error but still render if we have some data)
-  const error = rewardsError || historicalError || dexVolumeError || liquidityPoolsError || liquiditySummaryError;
+  const error = rewardsError || historicalError || liquidityPoolsError || liquiditySummaryError;
   if (error && !rewardsData) {
     return (
       <div className="dashboard-page">
@@ -250,13 +245,19 @@ export function Dashboard() {
               />
               <StatCard
                 label="Total Holders"
-                value={(stats.totalHolders || 0).toLocaleString()}
+                value={stats.totalHolders !== undefined && stats.totalHolders !== null
+                  ? stats.totalHolders.toLocaleString()
+                  : isLoadingRewards 
+                    ? 'Loading...'
+                    : 'N/A'}
               />
               <StatCard
                 label="DEX Vol 24h"
-                value={dexVolume24h !== null 
-                  ? `$${dexVolume24h.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                  : 'N/A'}
+                value={liquiditySummaryData && liquiditySummaryData.volume24hUSD > 0
+                  ? `$${liquiditySummaryData.volume24hUSD.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+                  : isLoadingLiquiditySummary
+                    ? 'Loading...'
+                    : 'N/A'}
               />
             </div>
           </GlassCard>
@@ -325,7 +326,11 @@ export function Dashboard() {
               </>
             ) : (
               <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                {isLoadingHistorical ? 'Loading distribution history...' : 'No distribution history available'}
+                {isLoadingHistorical 
+                  ? 'Loading distribution history...' 
+                  : historicalData && historicalData.cycles && historicalData.cycles.length === 0
+                    ? 'No distributions yet. Distributions will begin once there is trading volume.'
+                    : 'No distribution history available'}
               </div>
             )}
           </div>

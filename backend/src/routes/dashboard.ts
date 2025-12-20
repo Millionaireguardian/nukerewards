@@ -158,6 +158,8 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
 
     // Get all holders and eligible holders (with graceful error handling and deduplication)
     let allHolders: Array<{ address: string; owner: string; amount: string; decimals: number }> = [];
+    let totalHoldersFallback: number | null = null;
+    
     try {
       // Use deduplication to prevent concurrent requests
       allHolders = await getDeduplicatedRequest('tokenHolders', () => getTokenHolders());
@@ -169,7 +171,15 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
           query: req.query,
         });
         rateLimitLogger.recordRateLimitError();
-        // Return empty array - the response will still work with tax stats
+        // Try to get holder count from getAllHoldersWithStatus which might have cached data
+        try {
+          const holdersWithStatus = await getAllHoldersWithStatus();
+          totalHoldersFallback = holdersWithStatus.length;
+        } catch (fallbackError) {
+          // If that also fails, we'll return null and let frontend handle it
+          logger.debug('Could not get fallback holder count');
+        }
+        // Keep empty array - the response will use fallback count if available
         allHolders = [];
       } else {
         throw error;
@@ -201,8 +211,12 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
     const totalSOLDistributed = parseFloat(taxStats.totalSolDistributed || '0') / 1e9; // Convert lamports to SOL
 
     // Calculate statistics
-    const blacklistedCount = allHolders.filter(h => isBlacklisted(h.owner)).length;
-    const excludedCount = allHolders.length - eligibleHolders.length - blacklistedCount;
+    // Use fallback count if we have it, otherwise use actual allHolders array length
+    const actualHolderCount = totalHoldersFallback !== null ? totalHoldersFallback : allHolders.length;
+    const blacklistedCount = totalHoldersFallback !== null 
+      ? 0 // Can't calculate if we don't have holder list
+      : allHolders.filter(h => isBlacklisted(h.owner)).length;
+    const excludedCount = actualHolderCount - eligibleHolders.length - blacklistedCount;
 
     // Filter by pubkey if provided (for eligible holders only - no pending payouts)
     let filteredEligible = eligibleHolders;
@@ -215,7 +229,7 @@ router.get('/rewards', async (req: Request, res: Response): Promise<void> => {
       nextRun: schedulerStatus.nextRun ? new Date(schedulerStatus.nextRun).toISOString() : null,
       isRunning: schedulerStatus.isRunning,
       statistics: {
-        totalHolders: allHolders.length,
+        totalHolders: totalHoldersFallback !== null ? totalHoldersFallback : allHolders.length,
         eligibleHolders: eligibleHolders.length,
         excludedHolders: excludedCount,
         blacklistedHolders: blacklistedCount,

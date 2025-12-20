@@ -101,7 +101,7 @@ async function retryRequest<T>(
 // Create axios instance with production-safe configuration
 const apiClient: AxiosInstance = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 30000, // 30 seconds timeout
+  timeout: 60000, // 60 seconds timeout (increased for rate-limited endpoints)
   headers: {
     'Content-Type': 'application/json',
   },
