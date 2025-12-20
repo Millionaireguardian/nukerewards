@@ -48,10 +48,12 @@ function getRewardWallet(): Keypair {
 
 // Types for Raydium API response
 interface RaydiumApiPoolInfo {
-  mintA?: { address: string };
-  mintB?: { address: string };
+  mintA?: { address: string; decimals?: number };
+  mintB?: { address: string; decimals?: number };
   baseMint?: string;
   quoteMint?: string;
+  mintAmountA?: number;
+  mintAmountB?: number;
 }
 
 interface RaydiumApiResponse {
@@ -362,31 +364,93 @@ export async function swapNukeToSOL(
     });
 
     // Step 6: Calculate expected SOL output using constant product formula
-    // Get pool reserves - try both program IDs since we don't know which one the pool uses
-    let sourceVaultAccount;
-    try {
-      sourceVaultAccount = await getAccount(connection, poolSourceVault, 'confirmed', TOKEN_2022_PROGRAM_ID);
-    } catch (error) {
-      try {
-        sourceVaultAccount = await getAccount(connection, poolSourceVault, 'confirmed', TOKEN_PROGRAM_ID);
-      } catch (error2) {
-        throw new Error(`Failed to fetch source vault account ${poolSourceVault.toBase58()}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-
-    let destVaultAccount;
-    try {
-      destVaultAccount = await getAccount(connection, poolDestVault, 'confirmed', TOKEN_PROGRAM_ID); // SOL vault typically uses TOKEN_PROGRAM_ID
-    } catch (error) {
-      try {
-        destVaultAccount = await getAccount(connection, poolDestVault, 'confirmed', TOKEN_2022_PROGRAM_ID);
-      } catch (error2) {
-        throw new Error(`Failed to fetch destination vault account ${poolDestVault.toBase58()}: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    // Try to get pool reserves from Raydium API first (more reliable)
+    let sourceReserve: bigint;
+    let destReserve: bigint;
     
-    const sourceReserve = sourceVaultAccount.amount;
-    const destReserve = destVaultAccount.amount;
+    try {
+      const apiUrl = `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolId.toBase58()}`;
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const apiData: RaydiumApiResponse = await response.json() as RaydiumApiResponse;
+        if (apiData.success && apiData.data && apiData.data.length > 0) {
+          const poolInfo = apiData.data[0];
+          
+          // Try to get reserves from API
+          if (poolInfo.mintAmountA !== undefined && poolInfo.mintAmountB !== undefined && poolInfo.mintA && poolInfo.mintB) {
+            // Determine which amount corresponds to NUKE and which to SOL
+            const mintADecimals = poolInfo.mintA.decimals || 6;
+            const mintBDecimals = poolInfo.mintB.decimals || 9;
+            
+            const mintAAddress = poolInfo.mintA.address;
+            const mintBAddress = poolInfo.mintB.address;
+            
+            // Check which mint is NUKE and which is WSOL
+            if (mintAAddress === tokenMint.toBase58() && mintBAddress === WSOL_MINT.toBase58()) {
+              // mintA = NUKE, mintB = SOL
+              sourceReserve = BigInt(Math.floor(poolInfo.mintAmountA * Math.pow(10, mintADecimals)));
+              destReserve = BigInt(Math.floor(poolInfo.mintAmountB * Math.pow(10, mintBDecimals)));
+            } else if (mintBAddress === tokenMint.toBase58() && mintAAddress === WSOL_MINT.toBase58()) {
+              // mintB = NUKE, mintA = SOL
+              sourceReserve = BigInt(Math.floor(poolInfo.mintAmountB * Math.pow(10, mintBDecimals)));
+              destReserve = BigInt(Math.floor(poolInfo.mintAmountA * Math.pow(10, mintADecimals)));
+            } else {
+              throw new Error(`Pool mints don't match expected NUKE/SOL pair: ${mintAAddress}, ${mintBAddress}`);
+            }
+            
+            logger.debug('Got pool reserves from Raydium API', {
+              sourceReserve: sourceReserve.toString(),
+              destReserve: destReserve.toString(),
+              mintA: mintAAddress,
+              mintB: mintBAddress,
+            });
+          } else {
+            throw new Error('Pool API response missing mint amounts or mint info');
+          }
+        } else {
+          throw new Error('Pool API response invalid');
+        }
+      } else {
+        throw new Error(`Raydium API returned ${response.status}`);
+      }
+    } catch (apiError) {
+      logger.debug('Failed to get pool reserves from API, falling back to direct account fetch', {
+        error: apiError instanceof Error ? apiError.message : String(apiError),
+      });
+      
+      // Fallback: Try to fetch vault accounts directly
+      let sourceVaultAccount;
+      try {
+        sourceVaultAccount = await getAccount(connection, poolSourceVault, 'confirmed', TOKEN_2022_PROGRAM_ID);
+      } catch (error) {
+        try {
+          sourceVaultAccount = await getAccount(connection, poolSourceVault, 'confirmed', TOKEN_PROGRAM_ID);
+        } catch (error2) {
+          throw new Error(`Failed to fetch source vault account ${poolSourceVault.toBase58()}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      let destVaultAccount;
+      try {
+        destVaultAccount = await getAccount(connection, poolDestVault, 'confirmed', TOKEN_PROGRAM_ID);
+      } catch (error) {
+        try {
+          destVaultAccount = await getAccount(connection, poolDestVault, 'confirmed', TOKEN_2022_PROGRAM_ID);
+        } catch (error2) {
+          throw new Error(`Failed to fetch destination vault account ${poolDestVault.toBase58()}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      
+      sourceReserve = sourceVaultAccount.amount;
+      destReserve = destVaultAccount.amount;
+    }
 
     // Constant product: (x + dx) * (y - dy) = x * y
     // Solving for dy: dy = (y * dx) / (x + dx)
