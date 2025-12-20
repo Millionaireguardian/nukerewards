@@ -31,6 +31,7 @@ import {
   createSyncNativeInstruction,
   NATIVE_MINT,
 } from '@solana/spl-token';
+import { createHash } from 'crypto';
 import { connection, tokenMint } from '../config/solana';
 import { RAYDIUM_CONFIG, WSOL_MINT, getRaydiumPoolId, RAYDIUM_AMM_PROGRAM_ID } from '../config/raydium';
 import { logger } from '../utils/logger';
@@ -322,11 +323,51 @@ function createRaydiumCpmmSwapInstruction(
   minimumAmountOut: bigint,
   userWallet: PublicKey
 ): TransactionInstruction {
-  // CPMM swap instruction discriminator: 9 (Swap)
-  const instructionData = Buffer.alloc(17);
-  instructionData.writeUInt8(9, 0);
-  instructionData.writeBigUInt64LE(amountIn, 1); // Amount before transfer fee
-  instructionData.writeBigUInt64LE(minimumAmountOut, 9);
+  // CRITICAL: CPMM pools on Raydium use Anchor instruction format
+  // Anchor instructions use 8-byte discriminators derived from instruction name
+  // Discriminator = first 8 bytes of sha256("namespace:instruction_name")
+  // For Raydium CPMM swap, we need to derive the discriminator from the instruction name
+  // Common pattern: sha256("global:swap") or sha256("raydium_cpmm:swap")
+  
+  // CRITICAL: Anchor instruction discriminator calculation
+  // Anchor uses: first 8 bytes of sha256("namespace:instruction_name")
+  // For Raydium CPMM, common patterns are:
+  // - "global:swap" (most common)
+  // - "swap" (simpler, some programs use this)
+  // - "raydium_cpmm:swap" (program-specific)
+  // 
+  // We'll try "global:swap" first. If this fails with InstructionFallbackNotFound,
+  // we may need to try other instruction names or check the pool's IDL.
+  
+  // Calculate discriminator: sha256("global:swap")[0:8]
+  const discriminatorHash = createHash('sha256')
+    .update('global:swap')
+    .digest();
+  const swapDiscriminator = discriminatorHash.slice(0, 8);
+  
+  logger.info('CPMM swap discriminator calculation', {
+    instructionName: 'global:swap',
+    discriminatorHex: swapDiscriminator.toString('hex'),
+    discriminatorDecimal: swapDiscriminator.readUInt32LE(0).toString(),
+    note: 'If InstructionFallbackNotFound persists, may need different instruction name or check pool IDL',
+  });
+  
+  // Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
+  const instructionData = Buffer.alloc(24);
+  swapDiscriminator.copy(instructionData, 0);
+  
+  // Write amountIn at offset 8 (after 8-byte discriminator)
+  instructionData.writeBigUInt64LE(amountIn, 8);
+  
+  // Write minimumAmountOut at offset 16 (after discriminator + amountIn)
+  instructionData.writeBigUInt64LE(minimumAmountOut, 16);
+  
+  logger.debug('CPMM swap instruction data', {
+    discriminator: swapDiscriminator.toString('hex'),
+    amountIn: amountIn.toString(),
+    minimumAmountOut: minimumAmountOut.toString(),
+    instructionDataLength: instructionData.length,
+  });
 
   // CRITICAL: For Token-2022 source (NUKE), use TOKEN_2022_PROGRAM_ID
   // Even though destination is SPL Token (WSOL), the source transfer requires Token-2022 program
