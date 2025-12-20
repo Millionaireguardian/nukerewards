@@ -719,7 +719,7 @@ interface HoldersWithStatusCache {
 }
 
 let cachedHoldersWithStatus: HoldersWithStatusCache | null = null;
-const HOLDERS_STATUS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const HOLDERS_STATUS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes (optimized to reduce Helius RPC calls)
 let pendingHoldersWithStatusFetch: Promise<Array<{
   pubkey: string;
   balance: string;

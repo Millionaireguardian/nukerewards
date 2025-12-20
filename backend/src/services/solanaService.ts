@@ -26,7 +26,7 @@ interface TokenHoldersCache {
 }
 
 let cachedTokenHolders: TokenHoldersCache | null = null;
-const TOKEN_HOLDERS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache (increased to reduce RPC calls)
+const TOKEN_HOLDERS_CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache (optimized to reduce Helius RPC calls)
 const TOKEN_HOLDERS_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown between RPC calls
 
 // Track last successful fetch time to enforce cooldown
