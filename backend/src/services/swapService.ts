@@ -48,6 +48,7 @@ function getRewardWallet(): Keypair {
 
 /**
  * Fetch Raydium pool state to get vault addresses
+ * Uses Raydium API first, falls back to direct account parsing
  */
 async function getRaydiumPoolState(poolId: PublicKey): Promise<{
   tokenAVault: PublicKey;
@@ -56,7 +57,74 @@ async function getRaydiumPoolState(poolId: PublicKey): Promise<{
   poolPcMint: PublicKey;
 }> {
   try {
-    // Fetch pool account
+    // Try Raydium API first (more reliable)
+    try {
+      const apiUrl = `https://api-v3-devnet.raydium.io/pools/info/ids?ids=${poolId.toBase58()}`;
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data && data.data.length > 0) {
+          const poolInfo = data.data[0];
+          
+          // Extract mint addresses from API response
+          let mintA: PublicKey;
+          let mintB: PublicKey;
+          
+          if (poolInfo.mintA && poolInfo.mintB) {
+            // CPMM format
+            mintA = new PublicKey(poolInfo.mintA.address);
+            mintB = new PublicKey(poolInfo.mintB.address);
+          } else if (poolInfo.baseMint && poolInfo.quoteMint) {
+            // Legacy format
+            mintA = new PublicKey(poolInfo.baseMint);
+            mintB = new PublicKey(poolInfo.quoteMint);
+          } else {
+            throw new Error('Pool API response missing mint addresses');
+          }
+
+          // Still need to fetch vault addresses from account
+          const poolAccount = await connection.getAccountInfo(poolId);
+          if (!poolAccount) {
+            throw new Error(`Pool account not found: ${poolId.toBase58()}`);
+          }
+
+          if (poolAccount.data.length < 112) {
+            throw new Error(`Pool account data too short: ${poolAccount.data.length} bytes`);
+          }
+
+          const tokenAVault = new PublicKey(poolAccount.data.slice(48, 80));
+          const tokenBVault = new PublicKey(poolAccount.data.slice(80, 112));
+
+          logger.debug('Fetched pool state from API', {
+            poolId: poolId.toBase58(),
+            mintA: mintA.toBase58(),
+            mintB: mintB.toBase58(),
+            tokenAVault: tokenAVault.toBase58(),
+            tokenBVault: tokenBVault.toBase58(),
+          });
+
+          return {
+            tokenAVault,
+            tokenBVault,
+            poolCoinMint: mintA,
+            poolPcMint: mintB,
+          };
+        }
+      }
+    } catch (apiError) {
+      logger.debug('Failed to fetch pool from API, falling back to account parsing', {
+        error: apiError instanceof Error ? apiError.message : String(apiError),
+      });
+    }
+
+    // Fallback: Parse pool account directly
     const poolAccount = await connection.getAccountInfo(poolId);
     if (!poolAccount) {
       throw new Error(`Pool account not found: ${poolId.toBase58()}`);
@@ -79,6 +147,15 @@ async function getRaydiumPoolState(poolId: PublicKey): Promise<{
     const tokenBVault = new PublicKey(poolAccount.data.slice(80, 112));
     const poolCoinMint = new PublicKey(poolAccount.data.slice(112, 144));
     const poolPcMint = new PublicKey(poolAccount.data.slice(144, 176));
+
+    logger.debug('Parsed pool account data', {
+      poolId: poolId.toBase58(),
+      dataLength: poolAccount.data.length,
+      tokenAVault: tokenAVault.toBase58(),
+      tokenBVault: tokenBVault.toBase58(),
+      poolCoinMint: poolCoinMint.toBase58(),
+      poolPcMint: poolPcMint.toBase58(),
+    });
 
     return {
       tokenAVault,
@@ -218,11 +295,25 @@ export async function swapNukeToSOL(
     logger.info('Fetching Raydium pool state', { poolId: poolId.toBase58() });
     const poolState = await getRaydiumPoolState(poolId);
 
+    logger.info('Pool state fetched', {
+      poolCoinMint: poolState.poolCoinMint.toBase58(),
+      poolPcMint: poolState.poolPcMint.toBase58(),
+      tokenMint: tokenMint.toBase58(),
+      tokenAVault: poolState.tokenAVault.toBase58(),
+      tokenBVault: poolState.tokenBVault.toBase58(),
+    });
+
     // Determine swap direction: NUKE → SOL
     // Check which vault is NUKE and which is SOL
     const isNukeInVaultA = poolState.poolCoinMint.equals(tokenMint) || poolState.poolPcMint.equals(tokenMint);
     if (!isNukeInVaultA) {
-      throw new Error('Pool does not contain NUKE token');
+      logger.error('Pool does not contain NUKE token', {
+        poolCoinMint: poolState.poolCoinMint.toBase58(),
+        poolPcMint: poolState.poolPcMint.toBase58(),
+        expectedTokenMint: tokenMint.toBase58(),
+        poolId: poolId.toBase58(),
+      });
+      throw new Error(`Pool does not contain NUKE token. Pool mints: ${poolState.poolCoinMint.toBase58()}, ${poolState.poolPcMint.toBase58()}. Expected: ${tokenMint.toBase58()}`);
     }
 
     // Determine which mint is NUKE and which is SOL/WSOL
