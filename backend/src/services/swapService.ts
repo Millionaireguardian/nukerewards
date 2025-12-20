@@ -41,20 +41,9 @@ import { loadKeypairFromEnv } from '../utils/loadKeypairFromEnv';
 // DO NOT use pool IDs, config programs, or API metadata program IDs
 const RAYDIUM_AMM_V4_PROGRAM_ID = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
 
-// Hardcoded fallback values for NUKE/SOL pool (devnet)
-// These are used as fallbacks if API response is incomplete
-const HARDCODED_POOL_CONFIG = {
-  // Pool program ID for NUKE/SOL pool on devnet
-  programId: new PublicKey('DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb'),
-  // Mint addresses
-  mintA: new PublicKey('So11111111111111111111111111111111111111112'), // dwSOL
-  mintB: new PublicKey('CzPWFT9ezPy53mQUj48T17Jm4ep7sPcKwjpWw9tACTyq'), // NUKE
-  // Vault addresses
-  vaultA: new PublicKey('3FAzsES6Vxx91ETtacAPhseg3quHTSKeVXMWks1ivJVR'), // SOL vault
-  vaultB: new PublicKey('9T4RoNGUZdEgRojUU9gsh8Ffk6J3smpkY4EiF4a5w4HD'), // NUKE vault
-  // Pool type
-  poolType: 'Standard' as const,
-};
+// Note: Hardcoded fallbacks have been removed
+// Pool info (mints, vaults, program ID) must come from API response
+// Reserves are fetched from chain if API doesn't provide them
 
 // Default slippage tolerance (2%)
 const DEFAULT_SLIPPAGE_BPS = 200; // 2% = 200 basis points
@@ -98,15 +87,15 @@ interface RaydiumApiResponse {
  */
 async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   poolType: 'Standard' | 'Cpmm';
-  poolProgramId: PublicKey; // Program ID from API response (or hardcoded fallback)
+  poolProgramId: PublicKey;
   mintA: PublicKey;
   mintB: PublicKey;
-  reserveA: bigint; // Reserve amounts (0n if using hardcoded fallback)
-  reserveB: bigint; // Reserve amounts (0n if using hardcoded fallback)
+  reserveA?: bigint; // Reserve amounts from API (undefined if not provided - fetch from chain)
+  reserveB?: bigint; // Reserve amounts from API (undefined if not provided - fetch from chain)
   decimalsA: number;
   decimalsB: number;
-  vaultA: PublicKey; // Vault address for mintA (from API or hardcoded fallback)
-  vaultB: PublicKey; // Vault address for mintB (from API or hardcoded fallback)
+  vaultA: PublicKey;
+  vaultB: PublicKey;
 }> {
   // Use /pools/key/ids endpoint which includes vault addresses
   const apiUrl = `https://api-v3-devnet.raydium.io/pools/key/ids?ids=${poolId.toBase58()}`;
@@ -130,30 +119,20 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
 
   const poolInfo = apiData.data[0];
 
-  // Extract program ID from API response, fallback to hardcoded value
-  let poolProgramId: PublicKey;
-  if (poolInfo.programId) {
-    poolProgramId = new PublicKey(poolInfo.programId);
-  } else {
-    logger.warn('Pool program ID not in API response, using hardcoded fallback', {
-      poolId: poolId.toBase58(),
-      fallbackProgramId: HARDCODED_POOL_CONFIG.programId.toBase58(),
-    });
-    poolProgramId = HARDCODED_POOL_CONFIG.programId;
+  // Extract program ID from API response (required)
+  if (!poolInfo.programId) {
+    throw new Error('Pool API response missing programId');
   }
+  const poolProgramId = new PublicKey(poolInfo.programId);
 
-  // Handle pool type - API may not always return it, default to hardcoded value
-  // Standard AMM v4 pools may not have type field in API response
-  let normalizedType = '';
+  // Handle pool type - default to "Standard" if not provided (common for Standard AMM v4 pools)
+  let normalizedType = 'standard';
   if (poolInfo.type) {
     normalizedType = poolInfo.type.toLowerCase();
   } else {
-    // Default to hardcoded pool type if type is undefined (common for Standard AMM v4 pools)
-    logger.warn('Pool type not in API response, using hardcoded fallback', {
+    logger.info('Pool type not in API response, defaulting to "Standard"', {
       poolId: poolId.toBase58(),
-      fallbackPoolType: HARDCODED_POOL_CONFIG.poolType,
     });
-    normalizedType = HARDCODED_POOL_CONFIG.poolType.toLowerCase();
   }
 
   // Support both Standard AMM (v4) and CPMM pools - reject other types
@@ -161,75 +140,142 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     throw new Error(`Unsupported Raydium pool type: "${poolInfo.type}". Only Standard AMM (v4) and CPMM pools are supported.`);
   }
 
-  // Extract mint addresses, use hardcoded fallbacks if API response is incomplete
-  let mintA: PublicKey;
-  let mintB: PublicKey;
-  let decimalsA: number;
-  let decimalsB: number;
-  let reserveA: bigint;
-  let reserveB: bigint;
+  // Extract mint addresses (required - no fallbacks)
+  if (!poolInfo.mintA || !poolInfo.mintB) {
+    throw new Error('Pool API response missing mint addresses');
+  }
+  const mintA = new PublicKey(poolInfo.mintA.address);
+  const mintB = new PublicKey(poolInfo.mintB.address);
+  const decimalsA = poolInfo.mintA.decimals || 9;
+  const decimalsB = poolInfo.mintB.decimals || 6;
 
-  if (poolInfo.mintA && poolInfo.mintB && poolInfo.mintAmountA !== undefined && poolInfo.mintAmountB !== undefined) {
-    // Use API response values
-    mintA = new PublicKey(poolInfo.mintA.address);
-    mintB = new PublicKey(poolInfo.mintB.address);
-    decimalsA = poolInfo.mintA.decimals || 6;
-    decimalsB = poolInfo.mintB.decimals || 9;
-    
-    // Convert human-readable amounts to raw token units
+  // Extract reserves from API if available (will fetch from chain if missing)
+  let reserveA: bigint | undefined;
+  let reserveB: bigint | undefined;
+  if (poolInfo.mintAmountA !== undefined && poolInfo.mintAmountB !== undefined) {
     reserveA = BigInt(Math.floor(poolInfo.mintAmountA * Math.pow(10, decimalsA)));
     reserveB = BigInt(Math.floor(poolInfo.mintAmountB * Math.pow(10, decimalsB)));
-  } else {
-    // Fallback to hardcoded values if API response is incomplete
-    logger.warn('Pool mint information incomplete in API response, using hardcoded fallbacks', {
-      poolId: poolId.toBase58(),
-      hasMintA: !!poolInfo.mintA,
-      hasMintB: !!poolInfo.mintB,
-      hasAmountA: poolInfo.mintAmountA !== undefined,
-      hasAmountB: poolInfo.mintAmountB !== undefined,
+    logger.debug('Reserves extracted from API response', {
+      reserveA: reserveA.toString(),
+      reserveB: reserveB.toString(),
     });
-    mintA = HARDCODED_POOL_CONFIG.mintA;
-    mintB = HARDCODED_POOL_CONFIG.mintB;
-    decimalsA = 9; // SOL has 9 decimals
-    decimalsB = 6; // NUKE has 6 decimals
-    
-    // Note: We can't calculate reserves from hardcoded values, so we'll need to fetch from chain
-    // For now, use 0 as placeholder - this should be fetched from chain if needed
-    reserveA = 0n;
-    reserveB = 0n;
+  } else {
+    logger.info('Reserves not in API response - will fetch from chain', {
+      poolId: poolId.toBase58(),
+    });
   }
 
-  // Extract vault addresses from API response, use hardcoded fallbacks if missing
-  let vaultA: PublicKey;
-  let vaultB: PublicKey;
-  if (poolInfo.vault?.A && poolInfo.vault?.B) {
-    vaultA = new PublicKey(poolInfo.vault.A);
-    vaultB = new PublicKey(poolInfo.vault.B);
-  } else {
-    logger.warn('Pool vault addresses not in API response, using hardcoded fallbacks', {
-      poolId: poolId.toBase58(),
-      hasVaultA: !!poolInfo.vault?.A,
-      hasVaultB: !!poolInfo.vault?.B,
-    });
-    vaultA = HARDCODED_POOL_CONFIG.vaultA;
-    vaultB = HARDCODED_POOL_CONFIG.vaultB;
+  // Extract vault addresses (required - no fallbacks)
+  if (!poolInfo.vault?.A || !poolInfo.vault?.B) {
+    throw new Error('Pool API response missing vault addresses');
   }
+  const vaultA = new PublicKey(poolInfo.vault.A);
+  const vaultB = new PublicKey(poolInfo.vault.B);
 
   // Normalize pool type for return (capitalize first letter)
   const normalizedPoolType = normalizedType === 'standard' ? 'Standard' : 'Cpmm';
 
   return {
     poolType: normalizedPoolType as 'Standard' | 'Cpmm',
-    poolProgramId, // Program ID from API response
+    poolProgramId,
     mintA,
     mintB,
-    reserveA,
-    reserveB,
+    reserveA, // May be undefined if API doesn't provide reserves
+    reserveB, // May be undefined if API doesn't provide reserves
     decimalsA,
     decimalsB,
     vaultA,
     vaultB,
   };
+}
+
+/**
+ * Fetch vault reserves directly from chain
+ * Used when API doesn't provide reserve amounts
+ */
+async function fetchVaultReservesFromChain(
+  vaultA: PublicKey,
+  vaultB: PublicKey,
+  decimalsA: number,
+  decimalsB: number
+): Promise<{
+  reserveA: bigint;
+  reserveB: bigint;
+}> {
+  logger.info('Fetching vault reserves from chain', {
+    vaultA: vaultA.toBase58(),
+    vaultB: vaultB.toBase58(),
+  });
+
+  // Try TOKEN_2022_PROGRAM_ID first, then TOKEN_PROGRAM_ID
+  let vaultAAccount = null;
+  let vaultBAccount = null;
+
+  try {
+    vaultAAccount = await getAccount(connection, vaultA, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  } catch {
+    try {
+      vaultAAccount = await getAccount(connection, vaultA, 'confirmed', TOKEN_PROGRAM_ID);
+    } catch (error) {
+      throw new Error(`Failed to fetch vaultA account: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  try {
+    vaultBAccount = await getAccount(connection, vaultB, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  } catch {
+    try {
+      vaultBAccount = await getAccount(connection, vaultB, 'confirmed', TOKEN_PROGRAM_ID);
+    } catch (error) {
+      throw new Error(`Failed to fetch vaultB account: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (!vaultAAccount || !vaultBAccount) {
+    throw new Error('Failed to fetch vault accounts from chain');
+  }
+
+  logger.info('Vault reserves fetched from chain', {
+    reserveA: vaultAAccount.amount.toString(),
+    reserveB: vaultBAccount.amount.toString(),
+  });
+
+  return {
+    reserveA: vaultAAccount.amount,
+    reserveB: vaultBAccount.amount,
+  };
+}
+
+/**
+ * Verify pool has sufficient liquidity for the swap
+ */
+function verifyLiquidity(
+  sourceReserve: bigint,
+  destReserve: bigint,
+  amountIn: bigint,
+  minDestAmount: bigint
+): { valid: boolean; reason?: string } {
+  // Check source reserve is sufficient
+  if (sourceReserve === 0n) {
+    return { valid: false, reason: 'Source reserve (NUKE) is zero - pool has no liquidity' };
+  }
+
+  // Check destination reserve is sufficient
+  if (destReserve === 0n) {
+    return { valid: false, reason: 'Destination reserve (SOL) is zero - pool has no liquidity' };
+  }
+
+  // Check destination reserve has enough liquidity (at least 2x expected output for safety)
+  const minLiquidityRatio = 2n;
+  const requiredLiquidity = minDestAmount * minLiquidityRatio;
+  if (destReserve < requiredLiquidity) {
+    return {
+      valid: false,
+      reason: `Destination reserve (${destReserve.toString()}) is insufficient. Required: ${requiredLiquidity.toString()}, Available: ${destReserve.toString()}`,
+    };
+  }
+
+  return { valid: true };
 }
 
 /**
@@ -378,14 +424,14 @@ export async function swapNukeToSOL(
       note: 'Using pool program ID from API response',
     });
 
-    // Step 4: Determine swap direction and map mints
+    // Step 4: Determine swap direction and map mints/vaults
     const nukeMint = tokenMint;
     const solMint = WSOL_MINT;
     
     let poolSourceMint: PublicKey;
     let poolDestMint: PublicKey;
-    let sourceReserve: bigint;
-    let destReserve: bigint;
+    let poolSourceVault: PublicKey;
+    let poolDestVault: PublicKey;
     let sourceDecimals: number;
     let destDecimals: number;
 
@@ -393,104 +439,99 @@ export async function swapNukeToSOL(
       // mintA = NUKE, mintB = SOL
       poolSourceMint = poolInfo.mintA;
       poolDestMint = poolInfo.mintB;
-      sourceReserve = poolInfo.reserveA;
-      destReserve = poolInfo.reserveB;
+      poolSourceVault = poolInfo.vaultA;
+      poolDestVault = poolInfo.vaultB;
       sourceDecimals = poolInfo.decimalsA;
       destDecimals = poolInfo.decimalsB;
     } else if (poolInfo.mintB.equals(nukeMint) && poolInfo.mintA.equals(solMint)) {
       // mintB = NUKE, mintA = SOL
       poolSourceMint = poolInfo.mintB;
       poolDestMint = poolInfo.mintA;
-      sourceReserve = poolInfo.reserveB;
-      destReserve = poolInfo.reserveA;
+      poolSourceVault = poolInfo.vaultB;
+      poolDestVault = poolInfo.vaultA;
       sourceDecimals = poolInfo.decimalsB;
       destDecimals = poolInfo.decimalsA;
     } else {
       throw new Error(`Pool does not contain NUKE/SOL pair. Pool mints: ${poolInfo.mintA.toBase58()}, ${poolInfo.mintB.toBase58()}`);
     }
 
-    logger.info('Swap direction determined', {
+    // Step 4.5: Get reserves (from API if available, otherwise from chain)
+    let sourceReserve: bigint;
+    let destReserve: bigint;
+
+    if (poolInfo.reserveA !== undefined && poolInfo.reserveB !== undefined) {
+      // Use API reserves (map to source/dest based on swap direction)
+      if (poolInfo.mintA.equals(poolSourceMint)) {
+        sourceReserve = poolInfo.reserveA;
+        destReserve = poolInfo.reserveB;
+      } else {
+        sourceReserve = poolInfo.reserveB;
+        destReserve = poolInfo.reserveA;
+      }
+      logger.info('Using reserves from API', {
+        sourceReserve: sourceReserve.toString(),
+        destReserve: destReserve.toString(),
+      });
+    } else {
+      // Fetch reserves from chain
+      logger.info('API reserves not available, fetching from chain vaults');
+      const chainReserves = await fetchVaultReservesFromChain(
+        poolSourceVault,
+        poolDestVault,
+        sourceDecimals,
+        destDecimals
+      );
+      sourceReserve = chainReserves.reserveA;
+      destReserve = chainReserves.reserveB;
+      logger.info('Using reserves from chain', {
+        sourceReserve: sourceReserve.toString(),
+        destReserve: destReserve.toString(),
+      });
+    }
+
+    logger.info('Swap direction and reserves determined', {
       poolSourceMint: poolSourceMint.toBase58(),
       poolDestMint: poolDestMint.toBase58(),
+      poolSourceVault: poolSourceVault.toBase58(),
+      poolDestVault: poolDestVault.toBase58(),
       sourceReserve: sourceReserve.toString(),
       destReserve: destReserve.toString(),
     });
 
-    // Step 5: Get pool vault addresses from API response (more reliable than parsing account data)
-    let poolSourceVault: PublicKey;
-    let poolDestVault: PublicKey;
-
-    if (poolInfo.vaultA && poolInfo.vaultB) {
-      // Use vault addresses from API response
-      // vaultA corresponds to mintA, vaultB corresponds to mintB
-      if (poolInfo.mintA.equals(poolSourceMint)) {
-        // mintA is source (NUKE), so vaultA is source vault
-        poolSourceVault = poolInfo.vaultA;
-        poolDestVault = poolInfo.vaultB;
-      } else {
-        // mintB is source (NUKE), so vaultB is source vault
-        poolSourceVault = poolInfo.vaultB;
-        poolDestVault = poolInfo.vaultA;
-      }
-
-      logger.info('Pool vaults from API', {
-        poolSourceVault: poolSourceVault.toBase58(),
-        poolDestVault: poolDestVault.toBase58(),
-        vaultA: poolInfo.vaultA.toBase58(),
-        vaultB: poolInfo.vaultB.toBase58(),
-        mintA: poolInfo.mintA.toBase58(),
-        mintB: poolInfo.mintB.toBase58(),
-        note: 'Using vault addresses from Raydium API response',
-      });
-    } else {
-      // Fallback: Parse vault addresses from pool account data
-      logger.warn('Vault addresses not in API response, falling back to parsing pool account data');
-      const poolAccount = await connection.getAccountInfo(poolId);
-      if (!poolAccount) {
-        throw new Error(`Pool account not found: ${poolId.toBase58()}`);
-      }
-
-      if (poolAccount.data.length < 112) {
-        throw new Error(`Pool account data too short: ${poolAccount.data.length} bytes`);
-      }
-
-      // Pool account layout:
-      // Offset 48-80: tokenAVault (32 bytes)
-      // Offset 80-112: tokenBVault (32 bytes)
-      const tokenAVault = new PublicKey(poolAccount.data.slice(48, 80));
-      const tokenBVault = new PublicKey(poolAccount.data.slice(80, 112));
-
-      // Determine which vault is source and which is destination
-      if (poolInfo.mintA.equals(poolSourceMint)) {
-        poolSourceVault = tokenAVault;
-        poolDestVault = tokenBVault;
-      } else {
-        poolSourceVault = tokenBVault;
-        poolDestVault = tokenAVault;
-      }
-
-      logger.info('Pool vaults from account data', {
-        poolSourceVault: poolSourceVault.toBase58(),
-        poolDestVault: poolDestVault.toBase58(),
-      });
-    }
-
-    // Step 6: Calculate expected SOL output
-    // NOTE: NUKE has 4% transfer fee, so when we send amountNuke, the pool receives amountNuke * 0.96
-    // We need to account for this in our calculation
-    const feeMultiplier = 0.9975; // Raydium CPMM fee (0.25%)
+    // Step 5: Verify liquidity before calculating swap output
+    // First, estimate expected output for liquidity check
+    const feeMultiplier = 0.9975; // Raydium fee (0.25%)
     const nukeAfterTransferFee = amountNuke * BigInt(96) / BigInt(100); // 4% transfer fee deducted
     
-    // Constant product formula: (x + dx) * (y - dy) = x * y
-    // dy = (y * dx) / (x + dx)
+    // Estimate expected output for liquidity verification
+    const estimatedDestAmount = (destReserve * nukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + nukeAfterTransferFee) / BigInt(10000);
+    const estimatedMinDestAmount = (estimatedDestAmount * BigInt(10000 - slippageBps)) / BigInt(10000);
+
+    // Verify liquidity
+    const liquidityCheck = verifyLiquidity(sourceReserve, destReserve, amountNuke, estimatedMinDestAmount);
+    if (!liquidityCheck.valid) {
+      logger.warn('Insufficient liquidity - aborting swap', {
+        reason: liquidityCheck.reason,
+        sourceReserve: sourceReserve.toString(),
+        destReserve: destReserve.toString(),
+        amountNuke: amountNuke.toString(),
+        estimatedMinDestAmount: estimatedMinDestAmount.toString(),
+      });
+      throw new Error(`Insufficient liquidity: ${liquidityCheck.reason}`);
+    }
+
+    // Step 7: Calculate expected SOL output (final calculation)
     const expectedDestAmount = (destReserve * nukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + nukeAfterTransferFee) / BigInt(10000);
-    
-    // Apply slippage tolerance
     const minDestAmount = (expectedDestAmount * BigInt(10000 - slippageBps)) / BigInt(10000);
 
     if (minDestAmount < MIN_SOL_OUTPUT) {
+      logger.warn('Expected SOL output below minimum threshold', {
+        expectedSolLamports: expectedDestAmount.toString(),
+        minSolLamports: minDestAmount.toString(),
+        minimumThreshold: MIN_SOL_OUTPUT.toString(),
+      });
       throw new Error(
-        `Expected SOL output too low: ${Number(minDestAmount) / LAMPORTS_PER_SOL} SOL (minimum: ${MIN_SOL_OUTPUT / LAMPORTS_PER_SOL} SOL)`
+        `Expected SOL output too low: ${Number(minDestAmount) / LAMPORTS_PER_SOL} SOL (minimum: ${MIN_SOL_OUTPUT / LAMPORTS_PER_SOL} SOL). Pool may have insufficient liquidity.`
       );
     }
 
