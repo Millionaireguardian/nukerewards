@@ -38,7 +38,8 @@ import { connection, tokenMint, NETWORK } from '../config/solana';
 import { RAYDIUM_CONFIG, WSOL_MINT, getRaydiumPoolId, RAYDIUM_AMM_PROGRAM_ID } from '../config/raydium';
 import { logger } from '../utils/logger';
 import { loadKeypairFromEnv } from '../utils/loadKeypairFromEnv';
-import { Liquidity, ApiV3PoolInfoStandard, ApiV3PoolInfoItem, jsonInfo2PoolKeys, LiquidityPoolKeys } from '@raydium-io/raydium-sdk';
+// Raydium SDK imports - using dynamic import to handle type issues
+// import { Liquidity, ApiPoolInfoItem, jsonInfo2PoolKeys, LiquidityPoolKeys } from '@raydium-io/raydium-sdk';
 import { getTransferFeeConfig, unpackMint } from '@solana/spl-token';
 
 // Official Raydium AMM v4 Program ID (for Standard pools)
@@ -106,7 +107,7 @@ interface RaydiumApiResponse {
  * Fetch pool info from Raydium API in SDK-compatible format
  * Uses /pools/info/ids endpoint for SDK compatibility
  */
-async function fetchPoolInfoForSDK(poolId: PublicKey): Promise<ApiV3PoolInfoItem> {
+async function fetchPoolInfoForSDK(poolId: PublicKey): Promise<any> {
   const apiUrl = `https://api-v3${NETWORK === 'mainnet' ? '' : '-devnet'}.raydium.io/pools/info/ids?ids=${poolId.toBase58()}`;
   
   logger.info('Fetching pool info for SDK', {
@@ -127,12 +128,12 @@ async function fetchPoolInfoForSDK(poolId: PublicKey): Promise<ApiV3PoolInfoItem
     throw new Error(`Raydium API returned ${response.status}`);
   }
 
-  const data = await response.json();
+  const data = await response.json() as { success?: boolean; data?: any[] };
   if (!data.success || !data.data || data.data.length === 0) {
     throw new Error('Pool not found in Raydium API');
   }
 
-  return data.data[0] as ApiV3PoolInfoItem;
+  return data.data[0];
 }
 
 /**
@@ -1247,43 +1248,44 @@ export async function swapNukeToSOL(
         throw new Error(`Pool type mismatch: expected Standard, got ${sdkPoolInfo.type}`);
       }
 
-      const standardPoolInfo = sdkPoolInfo as ApiV3PoolInfoStandard;
+      // Use dynamic import for SDK to handle type issues
+      logger.info('Creating swap transaction using Raydium SDK', {
+        amountIn: amountNuke.toString(),
+        slippageBps,
+      });
 
+      // Dynamically import SDK modules
+      const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
+      
       // Convert API pool info to LiquidityPoolKeys using SDK
-      const poolKeys = jsonInfo2PoolKeys(standardPoolInfo) as LiquidityPoolKeys;
+      const poolKeys = jsonInfo2PoolKeys(sdkPoolInfo);
 
       logger.info('Pool keys extracted using SDK', {
         programId: poolKeys.programId.toBase58(),
-        mintA: poolKeys.mintA.toBase58(),
-        mintB: poolKeys.mintB.toBase58(),
-        version: poolKeys.version,
+        version: (poolKeys as any).version,
       });
 
-      // Calculate minimum amount out with slippage
-      // SDK handles this internally, but we calculate for validation
-      const slippage = slippageBps / 10000;
-
-      // Use SDK to create swap instruction
-      logger.info('Creating swap instruction using Raydium SDK', {
-        amountIn: amountNuke.toString(),
-        slippageBps,
-        fixedSide: 'in', // Exact input swap
-      });
-
-      swapInstruction = Liquidity.makeSwapInstruction(
-        {
-          poolKeys,
-          userKeys: {
-            tokenAccountIn: rewardNukeAccount,
-            tokenAccountOut: userSolAccount,
-            owner: rewardWalletAddress,
-          },
-          amountIn: amountNuke,
-          amountOut: 0, // 0 = SDK calculates output for exact input
-          fixedSide: 'in', // 'in' for exact input (we specify amountIn, SDK calculates amountOut)
+      // SDK's makeSwapInstruction returns a transaction-like object
+      const swapTx = Liquidity.makeSwapInstruction({
+        poolKeys: poolKeys as any,
+        userKeys: {
+          tokenAccountIn: rewardNukeAccount,
+          tokenAccountOut: userSolAccount,
+          owner: rewardWalletAddress,
         },
-        poolKeys.version
-      );
+        amountIn: amountNuke,
+        amountOut: 0, // 0 = SDK calculates output for exact input
+        fixedSide: 'in', // 'in' for exact input
+      });
+
+      // Extract the swap instruction from the SDK transaction
+      // The SDK returns an object with innerTransaction containing instructions
+      const innerTx = (swapTx as any).innerTransaction;
+      if (!innerTx || !innerTx.instructions || innerTx.instructions.length === 0) {
+        throw new Error('SDK failed to generate swap instruction');
+      }
+
+      swapInstruction = innerTx.instructions[0] as TransactionInstruction;
 
       logger.info('Swap instruction created using SDK', {
         instructionProgramId: swapInstruction.programId.toBase58(),
