@@ -34,7 +34,7 @@ import {
   NATIVE_MINT,
 } from '@solana/spl-token';
 import { createHash } from 'crypto';
-import { connection, tokenMint } from '../config/solana';
+import { connection, tokenMint, NETWORK } from '../config/solana';
 import { RAYDIUM_CONFIG, WSOL_MINT, getRaydiumPoolId, RAYDIUM_AMM_PROGRAM_ID } from '../config/raydium';
 import { logger } from '../utils/logger';
 import { loadKeypairFromEnv } from '../utils/loadKeypairFromEnv';
@@ -359,7 +359,10 @@ function createComputeBudgetInstructions(): TransactionInstruction[] {
 /**
  * Create Raydium swap instruction for Standard AMM v4 pools
  * 
- * Standard pools use the Raydium AMM v4 program ID (675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8)
+ * Standard pools use different program IDs depending on network:
+ * - Devnet: Pool-specific program ID from API (e.g., DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb)
+ * - Mainnet: Generic Raydium AMM v4 program ID (675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8)
+ * 
  * The instruction format uses discriminator 9 (0x09) for swap.
  * 
  * For Token-2022 source tokens (NUKE), we must handle the transfer fee correctly.
@@ -401,13 +404,10 @@ function createComputeBudgetInstructions(): TransactionInstruction[] {
  * NOTE: Standard AMM v4 uses a complex account structure. For simplicity, we'll use
  * a simplified account list. The actual implementation may need to fetch the full
  * pool state from chain to get all required accounts.
- * 
- * However, based on the user's requirements, for Standard pools we should use
- * the Raydium SDK swap function. Since we don't have the SDK installed, we'll
- * implement the instruction format manually based on the AMM v4 program structure.
  */
 function createRaydiumStandardSwapInstruction(
   poolId: PublicKey,
+  poolProgramId: PublicKey, // Pool-specific program ID for devnet, or AMM v4 ID for mainnet
   userSourceTokenAccount: PublicKey,
   userDestinationTokenAccount: PublicKey,
   poolSourceTokenAccount: PublicKey,
@@ -429,12 +429,12 @@ function createRaydiumStandardSwapInstruction(
   instructionData.writeBigUInt64LE(minimumAmountOut, 9);
 
   logger.info('Creating Standard AMM v4 swap instruction', {
-    poolProgramId: RAYDIUM_AMM_V4_PROGRAM_ID.toBase58(),
+    poolProgramId: poolProgramId.toBase58(),
     poolId: poolId.toBase58(),
     amountIn: amountIn.toString(),
     minimumAmountOut: minimumAmountOut.toString(),
     tokenProgramId: sourceTokenProgram.toBase58(),
-    note: 'Standard pools use Raydium AMM v4 program ID',
+    note: 'Standard pools use pool-specific program ID on devnet, generic AMM v4 ID on mainnet',
   });
 
   // NOTE: Standard AMM v4 requires many more accounts (20+) including serum market accounts.
@@ -447,7 +447,7 @@ function createRaydiumStandardSwapInstruction(
   // use the Raydium SDK or fetch the full pool state.
   
   return new TransactionInstruction({
-    programId: RAYDIUM_AMM_V4_PROGRAM_ID,
+    programId: poolProgramId, // Use the provided program ID (pool-specific for devnet, generic for mainnet)
     keys: [
       { pubkey: poolId, isSigner: false, isWritable: true },
       { pubkey: poolSourceTokenAccount, isSigner: false, isWritable: true },
@@ -954,9 +954,26 @@ export async function swapNukeToSOL(
     let swapInstruction: TransactionInstruction;
 
     if (poolInfo.poolType === 'Standard') {
-      // Standard pools use Raydium AMM v4 program ID
+      // Standard pools program ID selection:
+      // - Devnet: Use pool-specific program ID from API (required for devnet Standard pools)
+      // - Mainnet: Use generic Raydium AMM v4 program ID
+      const standardPoolProgramId = NETWORK === 'devnet'
+        ? poolInfo.poolProgramId // Devnet Standard pools require pool-specific program ID
+        : RAYDIUM_AMM_V4_PROGRAM_ID; // Mainnet Standard pools use generic AMM v4 ID
+
+      logger.info('Standard pool program ID selection', {
+        network: NETWORK,
+        poolProgramId: standardPoolProgramId.toBase58(),
+        apiPoolProgramId: poolInfo.poolProgramId.toBase58(),
+        genericAmmV4Id: RAYDIUM_AMM_V4_PROGRAM_ID.toBase58(),
+        note: NETWORK === 'devnet' 
+          ? 'Using pool-specific program ID for devnet Standard pool'
+          : 'Using generic AMM v4 program ID for mainnet Standard pool',
+      });
+
       swapInstruction = createRaydiumStandardSwapInstruction(
         poolId,
+        standardPoolProgramId, // Pool program ID (pool-specific for devnet, generic for mainnet)
         rewardNukeAccount, // userSourceTokenAccount
         userSolAccount, // userDestinationTokenAccount
         poolSourceVault, // poolSourceTokenAccount

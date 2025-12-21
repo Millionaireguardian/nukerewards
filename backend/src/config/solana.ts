@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 
 // Lazy initialization of Solana connection to allow server to start without Solana config
 let connectionInstance: Connection | null = null;
-const NETWORK = (env.SOLANA_NETWORK as string) || 'devnet';
+export const NETWORK = (env.SOLANA_NETWORK as string) || 'devnet';
 
 function validateRpcUrl(): string {
   const rpcUrl = (env.SOLANA_RPC_URL as string) || '';
