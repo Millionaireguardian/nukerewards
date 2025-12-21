@@ -1257,8 +1257,27 @@ export async function swapNukeToSOL(
       // Dynamically import SDK modules
       const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
       
+      // Remove non-SDK fields from pool info before passing to jsonInfo2PoolKeys
+      // The SDK expects only fields that can be converted to PublicKeys or other valid types
+      // Fields like 'type', 'price', 'tvl', 'volume24h', etc. are metadata and should be excluded
+      const { 
+        type, 
+        price, 
+        tvl, 
+        volume24h, 
+        volume24hUSD, 
+        volume7d, 
+        volume7dUSD,
+        ...cleanedPoolInfo 
+      } = sdkPoolInfo;
+      
+      logger.debug('Cleaned pool info for SDK', {
+        removedFields: { type, price, tvl, volume24h },
+        remainingFields: Object.keys(cleanedPoolInfo),
+      });
+      
       // Convert API pool info to LiquidityPoolKeys using SDK
-      const poolKeys = jsonInfo2PoolKeys(sdkPoolInfo);
+      const poolKeys = jsonInfo2PoolKeys(cleanedPoolInfo);
 
       logger.info('Pool keys extracted using SDK', {
         programId: poolKeys.programId.toBase58(),
