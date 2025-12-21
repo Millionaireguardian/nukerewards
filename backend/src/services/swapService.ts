@@ -1232,245 +1232,126 @@ export async function swapNukeToSOL(
       sourceTokenProgram: sourceTokenProgram.toBase58(),
     });
 
-    let swapInstruction: TransactionInstruction | null = null;
+    // Use Raydium SDK for ALL pool types (Standard, CPMM, CLMM)
+    // SDK automatically handles different pool types, vault accounts, and program IDs
+    logger.info('Using Raydium SDK for swap (handles all pool types)', {
+      network: NETWORK,
+      poolId: poolId.toBase58(),
+      poolType: poolInfo.poolType,
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
+    });
 
-    // Detect CPMM pool by programId or poolType
-    const isCpmmPool = poolInfo.poolType === 'Cpmm' || 
-                       poolInfo.poolProgramId.toBase58() === 'DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb';
+    // Fetch pool info in SDK-compatible format
+    const sdkPoolInfo = await fetchPoolInfoForSDK(poolId);
 
-    if (isCpmmPool) {
-      // Use manual CPMM swap instruction (CPMM pools use Anchor instruction format)
-      logger.info('Using manual CPMM swap instruction', {
-        network: NETWORK,
-        poolId: poolId.toBase58(),
-        poolProgramId: poolInfo.poolProgramId.toBase58(),
-      });
+    // Use dynamic import for SDK to handle type issues
+    logger.info('Creating swap transaction using Raydium SDK', {
+      amountIn: amountNuke.toString(),
+      slippageBps,
+      minAmountOut: minDestAmount.toString(),
+      poolType: sdkPoolInfo.type || poolInfo.poolType,
+    });
 
-      // Step 1: Properly detect Token-2022 and get transfer fee from on-chain
-      let nukeTransferFeeBps = sourceTransferFeeBps;
-      try {
-        const nukeMintInfo = await getMint(connection, nukeMint, 'confirmed', TOKEN_2022_PROGRAM_ID);
-        const transferFeeConfig = getTransferFeeConfig(nukeMintInfo);
-        if (transferFeeConfig) {
-          nukeTransferFeeBps = transferFeeConfig.newerTransferFee?.transferFeeBasisPoints ?? 
-                               transferFeeConfig.olderTransferFee?.transferFeeBasisPoints ?? 0;
-        }
-        logger.info('Token-2022 transfer fee detected from on-chain', {
-          nukeMint: nukeMint.toBase58(),
-          transferFeeBps: nukeTransferFeeBps,
-        });
-      } catch (error) {
-        logger.warn('Could not fetch Token-2022 transfer fee config from on-chain, using API value', {
-          error: error instanceof Error ? error.message : String(error),
-          fallbackTransferFeeBps: sourceTransferFeeBps,
-        });
-      }
+    // Dynamically import SDK modules
+    const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
+    
+    // Map pool info properly - ONLY include required address fields, NO logoURI/symbol/metadata
+    // This is critical: SDK will try to parse ALL fields as PublicKeys, causing errors
+    // Format: { id, programId, authority, mintA, mintB, vaultA, vaultB, lpMint, openTime }
+    const sdkPoolKeysData: any = {
+      id: sdkPoolInfo.id,
+      programId: sdkPoolInfo.programId,
+    };
 
-      // Step 2: Calculate amount after transfer fee (4% = 400 bps)
-      const amountNukeAfterTransferFee = nukeTransferFeeBps > 0
-        ? (amountNuke * BigInt(10000 - nukeTransferFeeBps)) / BigInt(10000)
-        : amountNuke;
-
-      logger.info('CPMM swap calculation', {
-        amountNuke: amountNuke.toString(),
-        amountNukeAfterTransferFee: amountNukeAfterTransferFee.toString(),
-        transferFeeBps: nukeTransferFeeBps,
-        sourceReserve: sourceReserve.toString(),
-        destReserve: destReserve.toString(),
-      });
-
-      // Step 3: Recalculate expected output with correct transfer fee
-      const feeMultiplier = 0.9975; // Raydium CPMM fee (0.25%)
-      const expectedDestAmount = (destReserve * amountNukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + amountNukeAfterTransferFee) / BigInt(10000);
-      const minDestAmountRecalc = (expectedDestAmount * BigInt(10000 - slippageBps)) / BigInt(10000);
-
-      if (minDestAmountRecalc < MIN_SOL_OUTPUT) {
-        throw new Error(
-          `Expected SOL output too low: ${Number(minDestAmountRecalc) / LAMPORTS_PER_SOL} SOL (minimum: ${MIN_SOL_OUTPUT / LAMPORTS_PER_SOL} SOL)`
-        );
-      }
-
-      logger.info('CPMM swap amounts', {
-        amountIn: amountNuke.toString(),
-        amountInAfterFee: amountNukeAfterTransferFee.toString(),
-        expectedOut: expectedDestAmount.toString(),
-        minOut: minDestAmountRecalc.toString(),
-      });
-
-      // Step 4: Create CPMM swap instruction using existing function
-      // Note: createRaydiumClmmSwapInstruction is actually for CPMM pools (based on comments)
-      swapInstruction = createRaydiumClmmSwapInstruction(
-        poolId,
-        poolInfo.poolProgramId, // CRITICAL: Use pool's program ID from API
-        rewardNukeAccount, // userSourceTokenAccount
-        userSolAccount, // userDestinationTokenAccount
-        poolSourceVault, // poolSourceTokenAccount
-        poolDestVault, // poolDestinationTokenAccount
-        poolSourceMint, // poolCoinMint
-        poolDestMint, // poolPcMint
-        amountNuke, // amountIn (before transfer fee - fee deducted during transfer)
-        minDestAmountRecalc, // minimumAmountOut
-        rewardWalletAddress, // userWallet
-        sourceTokenProgram // sourceTokenProgram (TOKEN_2022_PROGRAM_ID for NUKE)
-      );
-
-      logger.info('CPMM swap instruction created', {
-        instructionProgramId: swapInstruction.programId.toBase58(),
-        accountCount: swapInstruction.keys.length,
-        note: 'Using manual CPMM instruction with pool program ID from API',
-      });
-    } else if (poolInfo.poolType === 'Standard') {
-      // Use Raydium SDK for Standard pools
-      logger.info('Using Raydium SDK for Standard pool swap', {
-        network: NETWORK,
-        poolId: poolId.toBase58(),
-      });
-
-      // Fetch pool info in SDK-compatible format
-      const sdkPoolInfo = await fetchPoolInfoForSDK(poolId);
-      
-      if (sdkPoolInfo.type !== 'Standard') {
-        throw new Error(`Pool type mismatch: expected Standard, got ${sdkPoolInfo.type}`);
-      }
-
-      // Use dynamic import for SDK to handle type issues
-      logger.info('Creating swap transaction using Raydium SDK', {
-        amountIn: amountNuke.toString(),
-        slippageBps,
-        minAmountOut: minDestAmount.toString(),
-      });
-
-      // Dynamically import SDK modules
-      const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
-      
-      // Map pool info properly - ONLY include required address fields, NO logoURI/symbol/metadata
-      // This is critical: SDK will try to parse ALL fields as PublicKeys, causing errors
-      const sdkPoolKeysData: any = {
-        id: sdkPoolInfo.id,
-        programId: sdkPoolInfo.programId,
-      };
-
-      // Only include addresses - extract from nested objects if needed
-      if (sdkPoolInfo.mintA?.address) {
-        sdkPoolKeysData.mintA = sdkPoolInfo.mintA.address; // Just the address string
-      } else if (sdkPoolInfo.baseMint) {
-        sdkPoolKeysData.mintA = sdkPoolInfo.baseMint;
-      }
-
-      if (sdkPoolInfo.mintB?.address) {
-        sdkPoolKeysData.mintB = sdkPoolInfo.mintB.address; // Just the address string
-      } else if (sdkPoolInfo.quoteMint) {
-        sdkPoolKeysData.mintB = sdkPoolInfo.quoteMint;
-      }
-
-      // Vault addresses
-      if (sdkPoolInfo.vault?.A) {
-        sdkPoolKeysData.vaultA = sdkPoolInfo.vault.A;
-      }
-      if (sdkPoolInfo.vault?.B) {
-        sdkPoolKeysData.vaultB = sdkPoolInfo.vault.B;
-      }
-
-      // LP mint - extract address if it's an object
-      if (sdkPoolInfo.lpMint) {
-        if (typeof sdkPoolInfo.lpMint === 'string') {
-          sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint;
-        } else if (sdkPoolInfo.lpMint.address) {
-          sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint.address;
-        }
-      }
-
-      // Authority and openTime if available
-      if (sdkPoolInfo.authority) {
-        sdkPoolKeysData.authority = sdkPoolInfo.authority;
-      }
-      if (sdkPoolInfo.openTime !== undefined) {
-        sdkPoolKeysData.openTime = sdkPoolInfo.openTime;
-      }
-
-      // Remove any undefined/null values
-      Object.keys(sdkPoolKeysData).forEach(key => {
-        if (sdkPoolKeysData[key] === undefined || sdkPoolKeysData[key] === null) {
-          delete sdkPoolKeysData[key];
-        }
-      });
-
-      logger.debug('Mapped pool info for SDK (only addresses, no metadata)', {
-        includedFields: Object.keys(sdkPoolKeysData),
-        note: 'Excluded logoURI, symbol, price, tvl, volume, and all non-key fields',
-      });
-      
-      // Convert to SDK pool keys
-      const sdkPoolKeys = jsonInfo2PoolKeys(sdkPoolKeysData);
-
-      logger.info('Pool keys extracted using SDK', {
-        programId: sdkPoolKeys.programId.toBase58(),
-        version: (sdkPoolKeys as any).version,
-      });
-
-      // Use SDK's makeSwapInstruction with proper parameters
-      // SDK handles all account fetching, vault addresses, and instruction building
-      const swapTx = await Liquidity.makeSwapInstruction({
-        poolKeys: sdkPoolKeys as any, // Type assertion needed due to SDK type definitions
-        userKeys: {
-          tokenAccountIn: rewardNukeAccount,
-          tokenAccountOut: userSolAccount,
-          owner: rewardWalletAddress,
-        },
-        amountIn: amountNuke,
-        amountOut: minDestAmount, // Minimum amount out with slippage
-        fixedSide: 'in', // 'in' for exact input swap
-      });
-
-      // Extract the swap instruction from the SDK transaction
-      // The SDK returns an object with innerTransaction containing instructions
-      const innerTx = (swapTx as any).innerTransaction;
-      if (!innerTx || !innerTx.instructions || innerTx.instructions.length === 0) {
-        throw new Error('SDK failed to generate swap instruction');
-      }
-
-      // Add all instructions from SDK (may include multiple instructions for account setup)
-      for (const instruction of innerTx.instructions) {
-        transaction.add(instruction);
-      }
-
-      logger.info('Swap instruction created using SDK', {
-        instructionCount: innerTx.instructions.length,
-        note: 'SDK handles all account fetching, vault addresses, and instruction building automatically',
-      });
-
-      // Mark that instructions were already added
-      swapInstruction = null; // Not needed since we added instructions directly
-      (transaction as any)._sdkInstructionsAdded = true;
-    } else if (poolInfo.poolType === 'Clmm') {
-      // CLMM pools use pool-specific program ID with Anchor instruction format
-      swapInstruction = createRaydiumClmmSwapInstruction(
-        poolId,
-        poolInfo.poolProgramId, // CRITICAL: Use pool's program ID from API
-        rewardNukeAccount, // userSourceTokenAccount
-        userSolAccount, // userDestinationTokenAccount
-        poolSourceVault, // poolSourceTokenAccount
-        poolDestVault, // poolDestinationTokenAccount
-        poolSourceMint, // poolCoinMint
-        poolDestMint, // poolPcMint
-        amountNuke, // amountIn
-        minDestAmount, // minimumAmountOut
-        rewardWalletAddress, // userWallet
-        sourceTokenProgram // sourceTokenProgram
-      );
-    } else {
-      throw new Error(`Unsupported pool type: ${poolInfo.poolType}. Only Standard, CPMM, and CLMM pools are currently supported.`);
+    // Only include addresses - extract from nested objects if needed
+    if (sdkPoolInfo.mintA?.address) {
+      sdkPoolKeysData.mintA = sdkPoolInfo.mintA.address; // Just the address string
+    } else if (sdkPoolInfo.baseMint) {
+      sdkPoolKeysData.mintA = sdkPoolInfo.baseMint;
     }
 
-    // Add swap instruction (Standard pools add instructions via SDK, others use swapInstruction)
-    if ((transaction as any)._sdkInstructionsAdded) {
-      // SDK already added all instructions to transaction
-      logger.debug('SDK instructions already added to transaction');
-    } else if (swapInstruction) {
-      transaction.add(swapInstruction);
-    } else {
-      throw new Error('No swap instruction created');
+    if (sdkPoolInfo.mintB?.address) {
+      sdkPoolKeysData.mintB = sdkPoolInfo.mintB.address; // Just the address string
+    } else if (sdkPoolInfo.quoteMint) {
+      sdkPoolKeysData.mintB = sdkPoolInfo.quoteMint;
     }
+
+    // Vault addresses
+    if (sdkPoolInfo.vault?.A) {
+      sdkPoolKeysData.vaultA = sdkPoolInfo.vault.A;
+    }
+    if (sdkPoolInfo.vault?.B) {
+      sdkPoolKeysData.vaultB = sdkPoolInfo.vault.B;
+    }
+
+    // LP mint - extract address if it's an object
+    if (sdkPoolInfo.lpMint) {
+      if (typeof sdkPoolInfo.lpMint === 'string') {
+        sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint;
+      } else if (sdkPoolInfo.lpMint.address) {
+        sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint.address;
+      }
+    }
+
+    // Authority and openTime if available
+    if (sdkPoolInfo.authority) {
+      sdkPoolKeysData.authority = sdkPoolInfo.authority;
+    }
+    if (sdkPoolInfo.openTime !== undefined) {
+      sdkPoolKeysData.openTime = sdkPoolInfo.openTime;
+    }
+
+    // Remove any undefined/null values
+    Object.keys(sdkPoolKeysData).forEach(key => {
+      if (sdkPoolKeysData[key] === undefined || sdkPoolKeysData[key] === null) {
+        delete sdkPoolKeysData[key];
+      }
+    });
+
+    logger.debug('Mapped pool info for SDK (only addresses, no metadata)', {
+      includedFields: Object.keys(sdkPoolKeysData),
+      note: 'Excluded logoURI, symbol, price, tvl, volume, and all non-key fields',
+    });
+    
+    // Convert to SDK pool keys
+    const poolKeys = jsonInfo2PoolKeys(sdkPoolKeysData);
+
+    logger.info('Pool keys extracted using SDK', {
+      programId: poolKeys.programId.toBase58(),
+      version: (poolKeys as any).version,
+    });
+
+    // Use SDK's makeSwapInstruction - handles ALL pool types (Standard, CPMM, CLMM)
+    // SDK automatically handles vault accounts, program IDs, and instruction building
+    const swapTx = await Liquidity.makeSwapInstruction({
+      poolKeys: poolKeys as any, // Type assertion needed due to SDK type definitions
+      userKeys: {
+        tokenAccountIn: rewardNukeAccount,
+        tokenAccountOut: userSolAccount,
+        owner: rewardWalletAddress,
+      },
+      amountIn: amountNuke,
+      amountOut: minDestAmount, // Minimum amount out with slippage
+      fixedSide: 'in', // 'in' for exact input swap
+    });
+
+    // Extract the swap instruction from the SDK transaction
+    // The SDK returns an object with innerTransaction containing instructions
+    const innerTx = (swapTx as any).innerTransaction;
+    if (!innerTx || !innerTx.instructions || innerTx.instructions.length === 0) {
+      throw new Error('SDK failed to generate swap instruction');
+    }
+
+    // Add all instructions from SDK (may include multiple instructions for account setup)
+    for (const instruction of innerTx.instructions) {
+      transaction.add(instruction);
+    }
+
+    logger.info('Swap instruction created using SDK', {
+      instructionCount: innerTx.instructions.length,
+      poolType: poolInfo.poolType,
+      note: 'SDK handles all pool types (Standard/CPMM/CLMM), account fetching, vault addresses, and instruction building automatically',
+    });
 
     // Step 9: Set transaction properties
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
@@ -1583,70 +1464,64 @@ export async function swapNukeToSOL(
       throw sendError;
     }
 
-    // Step 12: Unwrap WSOL to native SOL if needed (for CPMM swaps)
-    if (isCpmmPool) {
-      try {
-        const userSolBalance = await getAccount(connection, userSolAccount, 'confirmed', TOKEN_PROGRAM_ID).catch(() => null);
-        if (userSolBalance && userSolBalance.amount > 0n) {
-          logger.info('Unwrapping WSOL to native SOL', {
-            wsolAmount: userSolBalance.amount.toString(),
-          });
-
-          const unwrapTx = new Transaction();
-          unwrapTx.add(
-            createSyncNativeInstruction(userSolAccount),
-            // Close WSOL account and send SOL to reward wallet
-            new TransactionInstruction({
-              programId: TOKEN_PROGRAM_ID,
-              keys: [
-                { pubkey: userSolAccount, isSigner: false, isWritable: true },
-                { pubkey: rewardWalletAddress, isSigner: false, isWritable: true },
-                { pubkey: rewardWalletAddress, isSigner: true, isWritable: false },
-              ],
-              data: Buffer.from([9]), // CloseAccount instruction discriminator
-            })
-          );
-
-          const { blockhash: unwrapBlockhash } = await connection.getLatestBlockhash('confirmed');
-          unwrapTx.recentBlockhash = unwrapBlockhash;
-          unwrapTx.feePayer = rewardWalletAddress;
-          unwrapTx.sign(rewardWallet);
-
-          try {
-            const unwrapSignature = await sendAndConfirmTransaction(
-              connection,
-              unwrapTx,
-              [rewardWallet],
-              { commitment: 'confirmed', maxRetries: 3 }
-            );
-            logger.info('WSOL unwrapped successfully', { signature: unwrapSignature });
-          } catch (unwrapError) {
-            logger.warn('Failed to unwrap WSOL, but swap succeeded', {
-              error: unwrapError instanceof Error ? unwrapError.message : String(unwrapError),
-              note: 'SOL is still available as WSOL in token account',
-            });
-          }
-        }
-      } catch (unwrapError) {
-        logger.warn('Error checking/unwrapping WSOL', {
-          error: unwrapError instanceof Error ? unwrapError.message : String(unwrapError),
+    // Step 12: Unwrap WSOL to native SOL if needed (for all swap types)
+    // Check if we received WSOL and unwrap it to native SOL
+    try {
+      const userSolBalance = await getAccount(connection, userSolAccount, 'confirmed', TOKEN_PROGRAM_ID).catch(() => null);
+      if (userSolBalance && userSolBalance.amount > 0n) {
+        logger.info('Unwrapping WSOL to native SOL', {
+          wsolAmount: userSolBalance.amount.toString(),
         });
+
+        const unwrapTx = new Transaction();
+        unwrapTx.add(
+          createSyncNativeInstruction(userSolAccount),
+          // Close WSOL account and send SOL to reward wallet
+          new TransactionInstruction({
+            programId: TOKEN_PROGRAM_ID,
+            keys: [
+              { pubkey: userSolAccount, isSigner: false, isWritable: true },
+              { pubkey: rewardWalletAddress, isSigner: false, isWritable: true },
+              { pubkey: rewardWalletAddress, isSigner: true, isWritable: false },
+            ],
+            data: Buffer.from([9]), // CloseAccount instruction discriminator
+          })
+        );
+
+        const { blockhash: unwrapBlockhash } = await connection.getLatestBlockhash('confirmed');
+        unwrapTx.recentBlockhash = unwrapBlockhash;
+        unwrapTx.feePayer = rewardWalletAddress;
+        unwrapTx.sign(rewardWallet);
+
+        try {
+          const unwrapSignature = await sendAndConfirmTransaction(
+            connection,
+            unwrapTx,
+            [rewardWallet],
+            { commitment: 'confirmed', maxRetries: 3 }
+          );
+          logger.info('WSOL unwrapped successfully', { signature: unwrapSignature });
+        } catch (unwrapError) {
+          logger.warn('Failed to unwrap WSOL, but swap succeeded', {
+            error: unwrapError instanceof Error ? unwrapError.message : String(unwrapError),
+            note: 'SOL is still available as WSOL in token account',
+          });
+        }
       }
+    } catch (unwrapError) {
+      logger.warn('Error checking/unwrapping WSOL', {
+        error: unwrapError instanceof Error ? unwrapError.message : String(unwrapError),
+      });
     }
 
     // Step 13: Verify SOL was received
+    // Check both native SOL balance (after unwrap) and WSOL account balance
     let solReceived = 0n;
-    if (isCpmmPool) {
-      // For CPMM, check native SOL balance (after unwrap) or WSOL balance
-      try {
-        const balance = await connection.getBalance(rewardWalletAddress, 'confirmed');
-        solReceived = BigInt(balance);
-      } catch {
-        // Fallback to WSOL account balance
-        const userSolBalance = await getAccount(connection, userSolAccount, 'confirmed', TOKEN_PROGRAM_ID).catch(() => null);
-        solReceived = userSolBalance ? userSolBalance.amount : 0n;
-      }
-    } else {
+    try {
+      const balance = await connection.getBalance(rewardWalletAddress, 'confirmed');
+      solReceived = BigInt(balance);
+    } catch {
+      // Fallback to WSOL account balance
       const userSolBalance = await getAccount(connection, userSolAccount, 'confirmed', TOKEN_PROGRAM_ID).catch(() => null);
       solReceived = userSolBalance ? userSolBalance.amount : 0n;
     }
