@@ -357,6 +357,206 @@ function createComputeBudgetInstructions(): TransactionInstruction[] {
 }
 
 /**
+ * Fetch Standard AMM v4 pool state from chain to extract all required accounts
+ * 
+ * Standard AMM v4 pool account structure (approximate offsets):
+ * - Offset 0-8: status
+ * - Offset 8-16: nonce
+ * - Offset 16-48: tokenProgramId
+ * - Offset 48-80: tokenAVault (base vault)
+ * - Offset 80-112: tokenBVault (quote vault)
+ * - Offset 112-144: poolCoinTokenAccount
+ * - Offset 144-176: poolPcTokenAccount
+ * - Offset 176-208: poolWithdrawQueue
+ * - Offset 208-240: poolTempLpTokenAccount
+ * - Offset 240-272: ammTargetOrders
+ * - Offset 272-304: poolCoinMint
+ * - Offset 304-336: poolPcMint
+ * - Offset 336-368: serumMarket
+ * - Offset 368-400: serumProgramId
+ * - Offset 400-432: ammTargetOrders (duplicate)
+ * - Offset 432-464: poolWithdrawQueue (duplicate)
+ * - Offset 464-496: poolTempLpTokenAccount (duplicate)
+ * - Offset 496-528: poolAuthority
+ * 
+ * Note: Actual offsets may vary. We'll parse the account data to extract PublicKeys.
+ */
+interface StandardPoolState {
+  ammTargetOrders: PublicKey;
+  poolCoinTokenAccount: PublicKey;
+  poolPcTokenAccount: PublicKey;
+  poolWithdrawQueue: PublicKey;
+  poolTempLpTokenAccount: PublicKey;
+  serumProgramId: PublicKey;
+  serumMarket: PublicKey;
+  serumBids: PublicKey;
+  serumAsks: PublicKey;
+  serumEventQueue: PublicKey;
+  serumCoinVaultAccount: PublicKey;
+  serumPcVaultAccount: PublicKey;
+  serumVaultSigner: PublicKey;
+  poolCoinMint: PublicKey;
+  poolPcMint: PublicKey;
+  poolAuthority: PublicKey;
+}
+
+async function fetchStandardPoolState(
+  poolId: PublicKey,
+  poolProgramId: PublicKey
+): Promise<StandardPoolState> {
+  logger.info('Fetching Standard AMM v4 pool state from chain', {
+    poolId: poolId.toBase58(),
+    poolProgramId: poolProgramId.toBase58(),
+  });
+
+  const poolAccountInfo = await connection.getAccountInfo(poolId);
+  if (!poolAccountInfo) {
+    throw new Error(`Pool account not found: ${poolId.toBase58()}`);
+  }
+
+  const data = poolAccountInfo.data;
+  logger.debug('Pool account data', {
+    dataLength: data.length,
+    owner: poolAccountInfo.owner.toBase58(),
+  });
+
+  if (data.length < 600) {
+    throw new Error(`Pool account data too short: ${data.length} bytes (expected at least 600). Pool may not be a Standard AMM v4 pool.`);
+  }
+
+  // Extract PublicKeys from pool account data
+  // PublicKey is 32 bytes, so we read 32-byte chunks
+  const readPublicKey = (offset: number, name: string): PublicKey => {
+    if (offset + 32 > data.length) {
+      throw new Error(`Cannot read ${name} at offset ${offset}: data length is ${data.length}`);
+    }
+    try {
+      return new PublicKey(data.slice(offset, offset + 32));
+    } catch (error) {
+      throw new Error(`Invalid PublicKey for ${name} at offset ${offset}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  // Parse pool account structure
+  // Standard AMM v4 pool account layout (approximate offsets - may vary):
+  // - Offset 0-8: status
+  // - Offset 8-16: nonce
+  // - Offset 16-48: tokenProgramId
+  // - Offset 48-80: tokenAVault
+  // - Offset 80-112: tokenBVault
+  // - Offset 112-144: poolCoinTokenAccount
+  // - Offset 144-176: poolPcTokenAccount
+  // - Offset 176-208: poolWithdrawQueue
+  // - Offset 208-240: poolTempLpTokenAccount
+  // - Offset 240-272: ammTargetOrders
+  // - Offset 272-304: poolCoinMint
+  // - Offset 304-336: poolPcMint
+  // - Offset 336-368: serumMarket
+  // - Offset 368-400: serumProgramId
+  // - Offset 400-432: ammTargetOrders (duplicate)
+  // - Offset 432-464: poolWithdrawQueue (duplicate)
+  // - Offset 464-496: poolTempLpTokenAccount (duplicate)
+  // - Offset 496-528: poolAuthority
+  let poolCoinTokenAccount: PublicKey;
+  let poolPcTokenAccount: PublicKey;
+  let poolWithdrawQueue: PublicKey;
+  let poolTempLpTokenAccount: PublicKey;
+  let ammTargetOrders: PublicKey;
+  let poolCoinMint: PublicKey;
+  let poolPcMint: PublicKey;
+  let serumMarket: PublicKey;
+  let serumProgramId: PublicKey;
+  let poolAuthority: PublicKey;
+
+  try {
+    poolCoinTokenAccount = readPublicKey(112, 'poolCoinTokenAccount');
+    poolPcTokenAccount = readPublicKey(144, 'poolPcTokenAccount');
+    poolWithdrawQueue = readPublicKey(176, 'poolWithdrawQueue');
+    poolTempLpTokenAccount = readPublicKey(208, 'poolTempLpTokenAccount');
+    ammTargetOrders = readPublicKey(240, 'ammTargetOrders');
+    poolCoinMint = readPublicKey(272, 'poolCoinMint');
+    poolPcMint = readPublicKey(304, 'poolPcMint');
+    serumMarket = readPublicKey(336, 'serumMarket');
+    serumProgramId = readPublicKey(368, 'serumProgramId');
+    poolAuthority = readPublicKey(496, 'poolAuthority');
+  } catch (error) {
+    throw new Error(`Failed to parse pool account structure: ${error instanceof Error ? error.message : String(error)}. The pool may use a different account layout.`);
+  }
+
+  // Fetch Serum market account to get bids, asks, event queue, and vaults
+  const serumMarketInfo = await connection.getAccountInfo(serumMarket);
+  if (!serumMarketInfo) {
+    throw new Error(`Serum market account not found: ${serumMarket.toBase58()}`);
+  }
+
+  const marketData = serumMarketInfo.data;
+  if (marketData.length < 288) {
+    throw new Error(`Serum market account data too short: ${marketData.length} bytes (expected at least 288)`);
+  }
+
+  // Serum market account structure (DEX v3):
+  // - Offset 0-32: ownAddress
+  // - Offset 32-40: vaultSignerNonce (u64, 8 bytes)
+  // - Offset 40-72: baseMint
+  // - Offset 72-104: quoteMint
+  // - Offset 104-136: baseVault
+  // - Offset 136-168: quoteVault
+  // - Offset 168-200: bids
+  // - Offset 200-232: asks
+  // - Offset 232-264: eventQueue
+  const vaultSignerNonce = marketData.readBigUInt64LE(32);
+  const serumCoinVaultAccount = new PublicKey(marketData.slice(104, 136));
+  const serumPcVaultAccount = new PublicKey(marketData.slice(136, 168));
+  const serumBids = new PublicKey(marketData.slice(168, 200));
+  const serumAsks = new PublicKey(marketData.slice(200, 232));
+  const serumEventQueue = new PublicKey(marketData.slice(232, 264));
+
+  // Calculate serumVaultSigner PDA
+  // serumVaultSigner = PDA([serumMarket, vaultSignerNonce], serumProgramId)
+  const vaultSignerNonceBuffer = Buffer.alloc(8);
+  vaultSignerNonceBuffer.writeBigUInt64LE(vaultSignerNonce, 0);
+  const [serumVaultSigner] = PublicKey.findProgramAddressSync(
+    [serumMarket.toBuffer(), vaultSignerNonceBuffer],
+    serumProgramId
+  );
+
+  logger.debug('Serum market accounts extracted', {
+    serumMarket: serumMarket.toBase58(),
+    serumBids: serumBids.toBase58(),
+    serumAsks: serumAsks.toBase58(),
+    serumEventQueue: serumEventQueue.toBase58(),
+    serumVaultSigner: serumVaultSigner.toBase58(),
+  });
+
+  logger.info('Standard pool state extracted', {
+    poolCoinTokenAccount: poolCoinTokenAccount.toBase58(),
+    poolPcTokenAccount: poolPcTokenAccount.toBase58(),
+    serumMarket: serumMarket.toBase58(),
+    serumBids: serumBids.toBase58(),
+    serumAsks: serumAsks.toBase58(),
+  });
+
+  return {
+    ammTargetOrders,
+    poolCoinTokenAccount,
+    poolPcTokenAccount,
+    poolWithdrawQueue,
+    poolTempLpTokenAccount,
+    serumProgramId,
+    serumMarket,
+    serumBids,
+    serumAsks,
+    serumEventQueue,
+    serumCoinVaultAccount,
+    serumPcVaultAccount,
+    serumVaultSigner,
+    poolCoinMint,
+    poolPcMint,
+    poolAuthority,
+  };
+}
+
+/**
  * Create Raydium swap instruction for Standard AMM v4 pools
  * 
  * Standard pools use different program IDs depending on network:
@@ -374,7 +574,7 @@ function createComputeBudgetInstructions(): TransactionInstruction[] {
  * - amountIn: u64 (8 bytes) - Amount BEFORE transfer fee deduction
  * - minimumAmountOut: u64 (8 bytes) - Minimum amount to receive (with slippage)
  * 
- * Accounts for Standard AMM v4 swap (Token-2022 source, SPL Token destination):
+ * Accounts for Standard AMM v4 swap (25 accounts total):
  * 0. ammTargetOrders (writable)
  * 1. poolCoinTokenAccount (writable) - Pool's source token vault
  * 2. poolPcTokenAccount (writable) - Pool's destination token vault
@@ -394,31 +594,24 @@ function createComputeBudgetInstructions(): TransactionInstruction[] {
  * 16. poolCoinMint - Source token mint
  * 17. poolPcMint - Destination token mint
  * 18. poolId (writable) - Pool account
- * 19. serumCoinVaultAccount (not writable)
- * 20. serumPcVaultAccount (not writable)
- * 21. ammTargetOrders (not writable)
- * 22. poolWithdrawQueue (not writable)
- * 23. poolTempLpTokenAccount (not writable)
+ * 19. serumCoinVaultAccount (not writable) - duplicate
+ * 20. serumPcVaultAccount (not writable) - duplicate
+ * 21. ammTargetOrders (not writable) - duplicate
+ * 22. poolWithdrawQueue (not writable) - duplicate
+ * 23. poolTempLpTokenAccount (not writable) - duplicate
  * 24. tokenProgramId - TOKEN_2022_PROGRAM_ID if source is Token-2022, else TOKEN_PROGRAM_ID
- * 
- * NOTE: Standard AMM v4 uses a complex account structure. For simplicity, we'll use
- * a simplified account list. The actual implementation may need to fetch the full
- * pool state from chain to get all required accounts.
  */
-function createRaydiumStandardSwapInstruction(
+async function createRaydiumStandardSwapInstruction(
   poolId: PublicKey,
   poolProgramId: PublicKey, // Pool-specific program ID for devnet, or AMM v4 ID for mainnet
+  poolState: StandardPoolState,
   userSourceTokenAccount: PublicKey,
   userDestinationTokenAccount: PublicKey,
-  poolSourceTokenAccount: PublicKey,
-  poolDestinationTokenAccount: PublicKey,
-  poolSourceMint: PublicKey,
-  poolDestMint: PublicKey,
   amountIn: bigint,
   minimumAmountOut: bigint,
   userWallet: PublicKey,
   sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
-): TransactionInstruction {
+): Promise<TransactionInstruction> {
   // Standard AMM v4 swap instruction discriminator: 9 (0x09)
   const SWAP_DISCRIMINATOR = 9;
   
@@ -428,37 +621,52 @@ function createRaydiumStandardSwapInstruction(
   instructionData.writeBigUInt64LE(amountIn, 1);
   instructionData.writeBigUInt64LE(minimumAmountOut, 9);
 
-  logger.info('Creating Standard AMM v4 swap instruction', {
+  logger.info('Creating Standard AMM v4 swap instruction with full account list', {
     poolProgramId: poolProgramId.toBase58(),
     poolId: poolId.toBase58(),
     amountIn: amountIn.toString(),
     minimumAmountOut: minimumAmountOut.toString(),
     tokenProgramId: sourceTokenProgram.toBase58(),
-    note: 'Standard pools use pool-specific program ID on devnet, generic AMM v4 ID on mainnet',
+    accountCount: 25,
+    note: 'Standard pools require 25 accounts including Serum market accounts',
   });
 
-  // NOTE: Standard AMM v4 requires many more accounts (20+) including serum market accounts.
-  // This is a simplified version. In production, you would need to:
-  // 1. Fetch the pool state from chain
-  // 2. Extract all required accounts (serum market, target orders, etc.)
-  // 3. Build the full account list
-  // 
-  // For now, we'll use a minimal account structure. If this fails, we may need to
-  // use the Raydium SDK or fetch the full pool state.
-  
+  // Build complete account list (25 accounts as per Standard AMM v4 specification)
   return new TransactionInstruction({
-    programId: poolProgramId, // Use the provided program ID (pool-specific for devnet, generic for mainnet)
+    programId: poolProgramId,
     keys: [
-      { pubkey: poolId, isSigner: false, isWritable: true },
-      { pubkey: poolSourceTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: poolDestinationTokenAccount, isSigner: false, isWritable: true },
+      // 0-4: Pool accounts
+      { pubkey: poolState.ammTargetOrders, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolCoinTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolPcTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolWithdrawQueue, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolTempLpTokenAccount, isSigner: false, isWritable: true },
+      // 5-11: Serum market accounts
+      { pubkey: poolState.serumProgramId, isSigner: false, isWritable: false },
+      { pubkey: poolState.serumMarket, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumBids, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumAsks, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumEventQueue, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumCoinVaultAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumPcVaultAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.serumVaultSigner, isSigner: false, isWritable: false },
+      // 13-15: User accounts
       { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
       { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
       { pubkey: userWallet, isSigner: true, isWritable: true },
-      { pubkey: poolSourceMint, isSigner: false, isWritable: false },
-      { pubkey: poolDestMint, isSigner: false, isWritable: false },
+      // 16-17: Mint accounts
+      { pubkey: poolState.poolCoinMint, isSigner: false, isWritable: false },
+      { pubkey: poolState.poolPcMint, isSigner: false, isWritable: false },
+      // 18: Pool account
+      { pubkey: poolId, isSigner: false, isWritable: true },
+      // 19-23: Duplicate accounts (required by program)
+      { pubkey: poolState.serumCoinVaultAccount, isSigner: false, isWritable: false },
+      { pubkey: poolState.serumPcVaultAccount, isSigner: false, isWritable: false },
+      { pubkey: poolState.ammTargetOrders, isSigner: false, isWritable: false },
+      { pubkey: poolState.poolWithdrawQueue, isSigner: false, isWritable: false },
+      { pubkey: poolState.poolTempLpTokenAccount, isSigner: false, isWritable: false },
+      // 24: Token program
       { pubkey: sourceTokenProgram, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: instructionData,
   });
@@ -971,15 +1179,17 @@ export async function swapNukeToSOL(
           : 'Using generic AMM v4 program ID for mainnet Standard pool',
       });
 
-      swapInstruction = createRaydiumStandardSwapInstruction(
+      // Fetch Standard pool state to get all required accounts (Serum market, orders, etc.)
+      logger.info('Fetching Standard pool state from chain for complete account list');
+      const poolState = await fetchStandardPoolState(poolId, standardPoolProgramId);
+
+      // Create swap instruction with full account list (25 accounts)
+      swapInstruction = await createRaydiumStandardSwapInstruction(
         poolId,
         standardPoolProgramId, // Pool program ID (pool-specific for devnet, generic for mainnet)
+        poolState, // Complete pool state with all required accounts
         rewardNukeAccount, // userSourceTokenAccount
         userSolAccount, // userDestinationTokenAccount
-        poolSourceVault, // poolSourceTokenAccount
-        poolDestVault, // poolDestinationTokenAccount
-        poolSourceMint, // poolSourceMint
-        poolDestMint, // poolDestMint
         amountNuke, // amountIn
         minDestAmount, // minimumAmountOut
         rewardWalletAddress, // userWallet
