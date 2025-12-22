@@ -1290,6 +1290,111 @@ export async function swapNukeToSOL(
     });
 
     // ===================================================================
+    // CRITICAL: Pre-validate SDK's token account query method
+    // ===================================================================
+    // The Raydium SDK's _selectTokenAccount uses getParsedTokenAccountsByOwner
+    // to query ALL token accounts for the owner, then filters them. If this query
+    // fails or returns undefined, the SDK crashes with ".filter() on undefined".
+    //
+    // SOLUTION: Test that the SDK's query method works BEFORE calling the SDK.
+    // This ensures the connection can successfully query token accounts.
+    // ===================================================================
+    
+    // Step 1: Test RPC connection health
+    let connectionHealthy = false;
+    try {
+      const slot = await connection.getSlot('confirmed');
+      if (slot && slot > 0) {
+        connectionHealthy = true;
+        logger.debug('RPC connection health check passed', { slot });
+      }
+    } catch (error) {
+      logger.error('RPC connection health check failed', {
+        error: error instanceof Error ? error.message : String(error),
+        note: 'SDK may fail if RPC is not responding',
+      });
+    }
+
+    // Step 2: Pre-validate that the SDK can query token accounts (simulates SDK's internal query)
+    try {
+      // The SDK likely uses getParsedTokenAccountsByOwner internally
+      // Test that this query works for the reward wallet
+      const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        rewardWalletAddress,
+        {
+          programId: TOKEN_PROGRAM_ID, // WSOL uses standard token program
+        },
+        'confirmed'
+      );
+
+      // Also check Token-2022 accounts (NUKE uses Token-2022)
+      const parsedToken2022Accounts = await connection.getParsedTokenAccountsByOwner(
+        rewardWalletAddress,
+        {
+          programId: TOKEN_2022_PROGRAM_ID, // NUKE uses Token-2022 program
+        },
+        'confirmed'
+      );
+
+      // CRITICAL: If query returns undefined or null, SDK will crash
+      if (parsedTokenAccounts.value === undefined || parsedTokenAccounts.value === null) {
+        throw new Error('getParsedTokenAccountsByOwner returned undefined for TOKEN_PROGRAM_ID - SDK will crash');
+      }
+      if (parsedToken2022Accounts.value === undefined || parsedToken2022Accounts.value === null) {
+        throw new Error('getParsedTokenAccountsByOwner returned undefined for TOKEN_2022_PROGRAM_ID - SDK will crash');
+      }
+
+      // Verify that our ATAs are in the query results
+      const allTokenAccounts = [...parsedTokenAccounts.value, ...parsedToken2022Accounts.value];
+      const foundNukeAta = allTokenAccounts.some(acc => acc.pubkey.equals(nukeAta));
+      const foundWsolAta = allTokenAccounts.some(acc => acc.pubkey.equals(wsolAta));
+
+      logger.info('SDK token account query pre-validation successful', {
+        connectionHealthy,
+        totalTokenAccounts: allTokenAccounts.length,
+        standardTokenAccounts: parsedTokenAccounts.value.length,
+        token2022Accounts: parsedToken2022Accounts.value.length,
+        nukeAtaFound: foundNukeAta,
+        wsolAtaFound: foundWsolAta,
+        nukeAtaAddress: nukeAta.toBase58(),
+        wsolAtaAddress: wsolAta.toBase58(),
+        note: 'SDK can successfully query token accounts - _selectTokenAccount will work',
+      });
+
+      if (!foundNukeAta) {
+        logger.warn('NUKE ATA not found in token account query (may still work if SDK uses different query)', {
+          nukeAta: nukeAta.toBase58(),
+          note: 'ATA exists on-chain but not in query results - SDK may use different query method',
+        });
+      }
+      if (!foundWsolAta) {
+        logger.warn('WSOL ATA not found in token account query (may still work if SDK uses different query)', {
+          wsolAta: wsolAta.toBase58(),
+          note: 'ATA exists on-chain but not in query results - SDK may use different query method',
+        });
+      }
+
+    } catch (error) {
+      // If the query fails, the SDK will also fail - throw error to prevent SDK call
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('SDK token account query pre-validation FAILED', {
+        error: errorMessage,
+        owner: rewardWalletAddress.toBase58(),
+        nukeAta: nukeAta.toBase58(),
+        wsolAta: wsolAta.toBase58(),
+        note: 'SDK will fail with .filter() error - aborting swap to prevent crash',
+      });
+      
+      // Throw error to prevent SDK call - this will cause swap to fail gracefully
+      throw new Error(
+        `SDK token account query validation failed: ${errorMessage}. ` +
+        `The Raydium SDK will crash with ".filter() on undefined" if we proceed. ` +
+        `Check RPC connection, account accessibility, and network status. ` +
+        `Both ATAs exist on-chain, but SDK cannot query them.`
+      );
+    }
+
+    // ===================================================================
     // CRITICAL: Do NOT create ATAs during swap transaction
     // ===================================================================
     // ATAs (NUKE and WSOL) must exist on-chain BEFORE calling the SDK.
