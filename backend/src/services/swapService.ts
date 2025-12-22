@@ -1255,9 +1255,11 @@ export async function swapNukeToSOL(
     // Dynamically import SDK modules
     const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
     
-    // Map pool info properly - ONLY include required address fields, NO logoURI/symbol/metadata
-    // This is critical: SDK will try to parse ALL fields as PublicKeys, causing errors
-    // Format: { id, programId, authority, mintA, mintB, vaultA, vaultB, lpMint, openTime }
+    // Map pool info properly - ONLY include required address fields (base58 addresses)
+    // CRITICAL: SDK will try to parse ALL fields as PublicKeys, causing "invalid public key" errors
+    // DO NOT include numeric metadata like openTime, feeRate, swap amounts, etc.
+    // Only include: id, programId, authority, mintA, mintB, vaultA, vaultB, lpMint (all must be base58 addresses)
+    // Following Chainstack article pattern: https://docs.chainstack.com/docs/solana-how-to-perform-token-swaps-using-the-raydium-sdk
     const sdkPoolKeysData: any = {
       id: sdkPoolInfo.id,
       programId: sdkPoolInfo.programId,
@@ -1293,13 +1295,14 @@ export async function swapNukeToSOL(
       }
     }
 
-    // Authority and openTime if available
+    // Authority (must be base58 address string)
     if (sdkPoolInfo.authority) {
       sdkPoolKeysData.authority = sdkPoolInfo.authority;
     }
-    if (sdkPoolInfo.openTime !== undefined) {
-      sdkPoolKeysData.openTime = sdkPoolInfo.openTime;
-    }
+
+    // CRITICAL: DO NOT include openTime, feeRate, or any numeric metadata
+    // These are NOT public keys and will cause "invalid public key" errors
+    // openTime is a numeric timestamp, NOT a base58 address
 
     // Remove any undefined/null values
     Object.keys(sdkPoolKeysData).forEach(key => {
@@ -1308,12 +1311,31 @@ export async function swapNukeToSOL(
       }
     });
 
-    logger.debug('Mapped pool info for SDK (only addresses, no metadata)', {
+    // Validate that all included fields are strings (base58 addresses)
+    // This prevents numeric values from being passed to jsonInfo2PoolKeys()
+    const numericFields = ['openTime', 'feeRate', 'tradeFeeRate', 'protocolFeeRate', 'mintAmountA', 'mintAmountB', 'tvl', 'volume', 'price'];
+    for (const key of Object.keys(sdkPoolKeysData)) {
+      if (numericFields.includes(key)) {
+        logger.warn(`Removing numeric field ${key} from pool keys data (not a public key)`, {
+          value: sdkPoolKeysData[key],
+        });
+        delete sdkPoolKeysData[key];
+      } else if (typeof sdkPoolKeysData[key] !== 'string') {
+        logger.warn(`Removing non-string field ${key} from pool keys data (expected base58 address)`, {
+          type: typeof sdkPoolKeysData[key],
+          value: sdkPoolKeysData[key],
+        });
+        delete sdkPoolKeysData[key];
+      }
+    }
+
+    logger.debug('Mapped pool info for SDK (only base58 addresses, no numeric metadata)', {
       includedFields: Object.keys(sdkPoolKeysData),
-      note: 'Excluded logoURI, symbol, price, tvl, volume, and all non-key fields',
+      note: 'Excluded openTime, feeRate, logoURI, symbol, price, tvl, volume, and all non-address fields',
     });
     
     // Convert to SDK pool keys
+    // This will only receive base58 address strings, no numeric values
     const poolKeys = jsonInfo2PoolKeys(sdkPoolKeysData);
 
     logger.info('Pool keys extracted using SDK', {
