@@ -97,7 +97,7 @@ interface RaydiumApiPoolInfo {
   tradeFeeRate?: number; // Trade fee rate
   protocolFeeRate?: number; // Protocol fee rate
   lpMint?: string; // LP token mint address
-  serumMarket?: string; // Serum market address (optional - may be missing for CPMM pools)
+  serumMarket?: string; // Serum market address (optional - may be missing for some AMM v4 pools)
 }
 
 interface RaydiumApiResponse {
@@ -195,7 +195,7 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   tradeFeeRate?: number;
   protocolFeeRate?: number;
   lpMint?: PublicKey;
-  hasSerumMarket: boolean; // Whether pool has Serum market (CPMM pools don't have Serum)
+  hasSerumMarket: boolean; // Whether pool has Serum market (optional for AMM v4 pools)
   serumMarket?: PublicKey; // Serum market address if available
 }> {
   // Use /pools/key/ids endpoint which includes vault addresses
@@ -287,9 +287,9 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   const normalizedPoolType = normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
 
   // Detect if pool has Serum market
-  // CPMM pools typically don't have Serum markets
-  // Standard pools may or may not have Serum markets
-  const hasSerumMarket = !!poolInfo.serumMarket && normalizedType !== 'cpmm';
+  // Serum market is optional for AMM v4 pools
+  // Some AMM v4 pools have Serum, others don't
+  const hasSerumMarket = !!poolInfo.serumMarket;
   const serumMarket = poolInfo.serumMarket ? new PublicKey(poolInfo.serumMarket) : undefined;
 
   logger.info('Pool info extracted from API', {
@@ -304,8 +304,8 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     protocolFeeRate,
     lpMint: lpMint?.toBase58(),
     note: hasSerumMarket 
-      ? 'Pool has Serum market - will use Standard AMM v4 instruction format'
-      : 'Pool does not have Serum market - will use CPMM instruction format (no Serum accounts)',
+      ? 'Pool has Serum market - will use Standard AMM v4 instruction format (25 accounts)'
+      : 'Pool does not have Serum market - will use AMM v4 Anchor instruction format (13 accounts, swap_base_in)',
   });
 
   return {
@@ -1813,12 +1813,13 @@ export async function swapNukeToSOL(
     });
 
     // ===================================================================
-    // CRITICAL: Pool classification based on PROGRAM ID, not Serum market
+    // CRITICAL: Pool classification based on PROGRAM ID ONLY
     // ===================================================================
     // Rule: If pool uses AMM v4 program ID, ALWAYS use AMM v4 instruction format
     // - AMM v4 pools can exist WITHOUT Serum market
-    // - Missing Serum does NOT mean CPMM
-    // - Program ID determines instruction format, not Serum presence
+    // - Missing Serum does NOT mean CPMM - Serum is OPTIONAL for AMM v4
+    // - Program ID determines instruction format, NOT Serum presence
+    // - CPMM logic is REMOVED - only AMM v4 pools are supported
     // ===================================================================
     
     // Check if pool is AMM v4 (mainnet or devnet program IDs)
@@ -1827,163 +1828,104 @@ export async function swapNukeToSOL(
       poolInfo.poolProgramId.toBase58() === 'DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb' ||
       poolInfo.poolProgramId.toBase58() === '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
 
-    const hasSerumMarket = poolInfo.hasSerumMarket ?? false;
-    
-    // CRITICAL: If it's AMM v4 program, ALWAYS use AMM v4 instruction (even without Serum)
-    if (isAmmV4Pool) {
-      logger.info('Pool is Raydium AMM v4 - using AMM v4 instruction format', {
-        poolId: poolId.toBase58(),
-        poolProgramId: poolInfo.poolProgramId.toBase58(),
-        hasSerumMarket,
-        note: 'AMM v4 pools MUST use AMM v4 instruction format, even if Serum market is missing',
-      });
-    } else if (poolInfo.poolType === 'Cpmm') {
-      // Only use CPMM instruction if pool is explicitly CPMM type AND not AMM v4 program
-      logger.info('Pool is CPMM (not AMM v4) - using CPMM instruction format', {
-        poolId: poolId.toBase58(),
-        poolProgramId: poolInfo.poolProgramId.toBase58(),
-        note: 'CPMM pools use different program ID and instruction format',
-      });
-    } else {
+    // CRITICAL: Only AMM v4 pools are supported - reject all others
+    if (!isAmmV4Pool) {
       throw new Error(
-        `Unsupported pool type or program ID: ${poolInfo.poolType}, program: ${poolInfo.poolProgramId.toBase58()}. ` +
-        `Only Raydium AMM v4 pools are currently supported.`
+        `Unsupported pool program ID: ${poolInfo.poolProgramId.toBase58()}. ` +
+        `Only Raydium AMM v4 pools (DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb or 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8) are supported. ` +
+        `CPMM pools are not supported.`
       );
     }
 
-    logger.info('Building swap instruction manually (no SDK)', {
+    const hasSerumMarket = poolInfo.hasSerumMarket ?? false;
+    
+    logger.info('Building Raydium AMM v4 swap instruction', {
       poolId: poolId.toBase58(),
-      poolType: poolInfo.poolType,
       poolProgramId: poolInfo.poolProgramId.toBase58(),
-      isAmmV4Pool,
       hasSerumMarket,
       nukeAta: nukeAta.toBase58(),
       wsolAta: wsolAta.toBase58(),
       amountIn: amountNuke.toString(),
       minAmountOut: minDestAmount.toString(),
-      note: isAmmV4Pool
-        ? `AMM v4 pool - using AMM v4 instruction format (Serum: ${hasSerumMarket ? 'yes' : 'no'})`
-        : 'CPMM pool - using CPMM instruction format',
+      note: hasSerumMarket 
+        ? 'AMM v4 pool with Serum market - using full 25-account instruction'
+        : 'AMM v4 pool without Serum market - using AMM v4 Anchor instruction format (swap_base_in)',
     });
 
-    let swapInstruction: TransactionInstruction | undefined;
+    // ===================================================================
+    // CRITICAL: AMM v4 pools ALWAYS use AMM v4 instruction format
+    // ===================================================================
+    // Serum market is OPTIONAL for AMM v4 pools:
+    // - With Serum: Use 25-account instruction (legacy format)
+    // - Without Serum: Use 13-account Anchor instruction (swap_base_in)
+    // ===================================================================
+    
+    // Fetch AMM v4 pool state from chain
+    const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
 
-    if (isAmmV4Pool) {
-      // AMM v4 pool - ALWAYS use AMM v4 instruction format (even without Serum)
-      logger.info('Using Raydium AMM v4 swap instruction', {
+    let swapInstruction: TransactionInstruction;
+
+    if (hasSerumMarket) {
+      // AMM v4 with Serum - use full 25-account instruction (legacy format)
+      logger.info('Creating AMM v4 swap instruction with Serum market (25 accounts)', {
         poolId: poolId.toBase58(),
         poolProgramId: poolInfo.poolProgramId.toBase58(),
-        hasSerumMarket,
-        note: hasSerumMarket 
-          ? 'AMM v4 pool with Serum market - using full 25-account instruction'
-          : 'AMM v4 pool without Serum market - using AMM v4 Anchor instruction format',
       });
 
-      // Fetch AMM v4 pool state from chain
-      const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
+      swapInstruction = await createRaydiumStandardSwapInstruction(
+        poolId,
+        poolInfo.poolProgramId,
+        poolState,
+        nukeAta,
+        wsolAta,
+        amountNuke,
+        minDestAmount,
+        rewardWalletAddress,
+        sourceTokenProgram
+      );
 
-      // Create AMM v4 swap instruction
-      // If Serum is missing, we'll build AMM v4 Anchor instruction without Serum accounts
-      if (hasSerumMarket) {
-        // AMM v4 with Serum - use full 25-account instruction
-        swapInstruction = await createRaydiumStandardSwapInstruction(
-          poolId,
-          poolInfo.poolProgramId,
-          poolState,
-          nukeAta,
-          wsolAta,
-          amountNuke,
-          minDestAmount,
-          rewardWalletAddress,
-          sourceTokenProgram
-        );
-
-        // Validate Standard AMM v4 swap instruction
-        if (swapInstruction.keys.length !== 25) {
-          throw new Error(`Standard AMM v4 swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for AMM v4 with Serum`);
-        }
-      } else {
-        // AMM v4 without Serum - use AMM v4 Anchor instruction format (swap_base_in)
-        swapInstruction = await createRaydiumAmmV4AnchorSwapInstruction(
-          poolId,
-          poolInfo.poolProgramId,
-          poolState,
-          nukeAta,
-          wsolAta,
-          amountNuke,
-          minDestAmount,
-          rewardWalletAddress,
-          sourceTokenProgram
-        );
+      // Validate Standard AMM v4 swap instruction
+      if (swapInstruction.keys.length !== 25) {
+        throw new Error(`Standard AMM v4 swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for AMM v4 with Serum`);
       }
-
-      // Validate AMM v4 swap instruction
-      if (!swapInstruction.programId) {
-        throw new Error('AMM v4 swap instruction missing programId');
-      }
-      if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
-        throw new Error('AMM v4 swap instruction missing or invalid keys array');
-      }
-
-      logger.info('AMM v4 swap instruction created successfully', {
-        accountCount: swapInstruction.keys.length,
-        hasSerumMarket,
-        note: hasSerumMarket 
-          ? 'AMM v4 with Serum market (25 accounts)'
-          : 'AMM v4 without Serum market (Anchor format)',
-      });
-    } else if (poolInfo.poolType === 'Cpmm') {
-      // CPMM pool - no Serum market, use simpler instruction format
-      logger.info('Using CPMM swap instruction (no Serum market)', {
+    } else {
+      // AMM v4 without Serum - use AMM v4 Anchor instruction format (swap_base_in)
+      // This is the CORRECT instruction format for AMM v4 pools without Serum
+      logger.info('Creating AMM v4 Anchor swap instruction without Serum market (13 accounts)', {
         poolId: poolId.toBase58(),
         poolProgramId: poolInfo.poolProgramId.toBase58(),
-        note: 'CPMM pools do not require Serum market accounts',
+        note: 'Using swap_base_in Anchor instruction format - Serum accounts are omitted',
       });
 
-      // Fetch CPMM pool state (simpler, no Serum)
-      const cpmmPoolState = await fetchCpmmPoolState(
+      swapInstruction = await createRaydiumAmmV4AnchorSwapInstruction(
         poolId,
         poolInfo.poolProgramId,
-        poolSourceVault,
-        poolDestVault,
-        poolSourceMint,
-        poolDestMint
+        poolState,
+        nukeAta,
+        wsolAta,
+        amountNuke,
+        minDestAmount,
+        rewardWalletAddress,
+        sourceTokenProgram
       );
-
-      // Create CPMM swap instruction (no Serum accounts)
-      swapInstruction = createRaydiumCpmmSwapInstruction(
-        poolId,
-        poolInfo.poolProgramId,
-        cpmmPoolState,
-        nukeAta,        // userSourceTokenAccount (NUKE ATA - Token-2022)
-        wsolAta,        // userDestinationTokenAccount (WSOL ATA - standard token)
-        amountNuke,     // amountIn (before transfer fee)
-        minDestAmount,  // minimumAmountOut (with slippage)
-        rewardWalletAddress, // userWallet
-        sourceTokenProgram // TOKEN_2022_PROGRAM_ID for NUKE
-      );
-
-      // Validate CPMM swap instruction
-      if (!swapInstruction.programId) {
-        throw new Error('CPMM swap instruction missing programId');
-      }
-      if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
-        throw new Error('CPMM swap instruction missing or invalid keys array');
-      }
-      if (swapInstruction.keys.length !== 10) {
-        throw new Error(`CPMM swap instruction has ${swapInstruction.keys.length} accounts, expected 10 for CPMM pools`);
-      }
-
-      logger.info('CPMM swap instruction created successfully', {
-        accountCount: swapInstruction.keys.length,
-        note: 'CPMM pools use simpler account structure without Serum market',
-      });
     }
 
-    // Ensure swapInstruction was created
-    if (!swapInstruction) {
-      throw new Error('Swap instruction was not created - this should never happen');
+    // Validate AMM v4 swap instruction
+    if (!swapInstruction.programId) {
+      throw new Error('AMM v4 swap instruction missing programId');
     }
+    if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
+      throw new Error('AMM v4 swap instruction missing or invalid keys array');
+    }
+
+    logger.info('AMM v4 swap instruction created successfully', {
+      accountCount: swapInstruction.keys.length,
+      hasSerumMarket,
+      note: hasSerumMarket 
+        ? 'AMM v4 with Serum market (25 accounts - legacy format)'
+        : 'AMM v4 without Serum market (13 accounts - Anchor swap_base_in format)',
+    });
+
 
     // Validate all account keys are defined
     for (let j = 0; j < swapInstruction.keys.length; j++) {
@@ -2001,13 +1943,14 @@ export async function swapNukeToSOL(
     // Add swap instruction to transaction
     transaction.add(swapInstruction);
 
-    logger.info('Standard AMM v4 swap instruction created manually', {
+    logger.info('AMM v4 swap instruction added to transaction', {
       poolProgramId: poolInfo.poolProgramId.toBase58(),
       poolId: poolId.toBase58(),
       accountCount: swapInstruction.keys.length,
       amountIn: amountNuke.toString(),
       minAmountOut: minDestAmount.toString(),
-      sourceTokenProgram: TOKEN_2022_PROGRAM_ID.toBase58(),
+      sourceTokenProgram: sourceTokenProgram.toBase58(),
+      hasSerumMarket,
       note: 'Manual instruction builder - no SDK dependency, full Token-2022 support',
     });
 
