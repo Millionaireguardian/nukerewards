@@ -12,10 +12,11 @@
     "resolveJsonModule": true,
     "moduleResolution": "node",
     "types": ["node", "express"],
+    "typeRoots": ["./src/types", "./node_modules/@types"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
