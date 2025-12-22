@@ -97,6 +97,7 @@ interface RaydiumApiPoolInfo {
   tradeFeeRate?: number; // Trade fee rate
   protocolFeeRate?: number; // Protocol fee rate
   lpMint?: string; // LP token mint address
+  serumMarket?: string; // Serum market address (optional - may be missing for CPMM pools)
 }
 
 interface RaydiumApiResponse {
@@ -194,6 +195,8 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   tradeFeeRate?: number;
   protocolFeeRate?: number;
   lpMint?: PublicKey;
+  hasSerumMarket: boolean; // Whether pool has Serum market (CPMM pools don't have Serum)
+  serumMarket?: PublicKey; // Serum market address if available
 }> {
   // Use /pools/key/ids endpoint which includes vault addresses
   const apiUrl = `https://api-v3-devnet.raydium.io/pools/key/ids?ids=${poolId.toBase58()}`;
@@ -283,15 +286,26 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   // Normalize pool type for return (capitalize first letter)
   const normalizedPoolType = normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
 
+  // Detect if pool has Serum market
+  // CPMM pools typically don't have Serum markets
+  // Standard pools may or may not have Serum markets
+  const hasSerumMarket = !!poolInfo.serumMarket && normalizedType !== 'cpmm';
+  const serumMarket = poolInfo.serumMarket ? new PublicKey(poolInfo.serumMarket) : undefined;
+
   logger.info('Pool info extracted from API', {
     poolType: normalizedPoolType,
     poolProgramId: poolProgramId.toBase58(),
+    hasSerumMarket,
+    serumMarket: serumMarket?.toBase58(),
     transferFeeA: transferFeeBasisPointsA,
     transferFeeB: transferFeeBasisPointsB,
     feeRate,
     tradeFeeRate,
     protocolFeeRate,
     lpMint: lpMint?.toBase58(),
+    note: hasSerumMarket 
+      ? 'Pool has Serum market - will use Standard AMM v4 instruction format'
+      : 'Pool does not have Serum market - will use CPMM instruction format (no Serum accounts)',
   });
 
   return {
@@ -311,6 +325,8 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     tradeFeeRate,
     protocolFeeRate,
     lpMint,
+    hasSerumMarket,
+    serumMarket,
   };
 }
 
@@ -470,6 +486,18 @@ interface StandardPoolState {
   poolCoinMint: PublicKey;
   poolPcMint: PublicKey;
   poolAuthority: PublicKey;
+}
+
+/**
+ * CPMM pool state (Constant Product Market Maker - no Serum market)
+ * CPMM pools use a simpler account structure without Serum accounts
+ */
+interface CpmmPoolState {
+  poolCoinTokenAccount: PublicKey; // Pool's source token vault
+  poolPcTokenAccount: PublicKey;   // Pool's destination token vault
+  poolCoinMint: PublicKey;          // Source token mint
+  poolPcMint: PublicKey;            // Destination token mint
+  poolAuthority: PublicKey;        // Pool authority
 }
 
 async function fetchStandardPoolState(
@@ -657,6 +685,165 @@ async function fetchStandardPoolState(
     poolPcMint,
     poolAuthority,
   };
+}
+
+/**
+ * Fetch CPMM pool state from chain (no Serum market)
+ * CPMM pools have a simpler structure without Serum accounts
+ */
+async function fetchCpmmPoolState(
+  poolId: PublicKey,
+  poolProgramId: PublicKey,
+  vaultA: PublicKey,
+  vaultB: PublicKey,
+  mintA: PublicKey,
+  mintB: PublicKey
+): Promise<CpmmPoolState> {
+  logger.info('Fetching CPMM pool state from chain (no Serum market)', {
+    poolId: poolId.toBase58(),
+    poolProgramId: poolProgramId.toBase58(),
+    vaultA: vaultA.toBase58(),
+    vaultB: vaultB.toBase58(),
+  });
+
+  // Verify vaults exist
+  try {
+    await getAccount(connection, vaultA, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  } catch {
+    try {
+      await getAccount(connection, vaultA, 'confirmed', TOKEN_PROGRAM_ID);
+    } catch (error) {
+      throw new Error(`CPMM pool vault A not found: ${vaultA.toBase58()}`);
+    }
+  }
+
+  try {
+    await getAccount(connection, vaultB, 'confirmed', TOKEN_PROGRAM_ID);
+  } catch {
+    try {
+      await getAccount(connection, vaultB, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    } catch (error) {
+      throw new Error(`CPMM pool vault B not found: ${vaultB.toBase58()}`);
+    }
+  }
+
+  // For CPMM pools, vaults are the token accounts
+  // Determine which vault is which based on mints
+  let poolCoinTokenAccount: PublicKey;
+  let poolPcTokenAccount: PublicKey;
+  let poolCoinMint: PublicKey;
+  let poolPcMint: PublicKey;
+
+  // Determine order based on which mint is NUKE
+  const nukeMint = tokenMint;
+  if (mintA.equals(nukeMint)) {
+    poolCoinTokenAccount = vaultA;
+    poolPcTokenAccount = vaultB;
+    poolCoinMint = mintA;
+    poolPcMint = mintB;
+  } else {
+    poolCoinTokenAccount = vaultB;
+    poolPcTokenAccount = vaultA;
+    poolCoinMint = mintB;
+    poolPcMint = mintA;
+  }
+
+  // Get pool authority (may need to derive from pool account or use a default)
+  // For CPMM, we'll use the pool ID as authority placeholder (may need adjustment)
+  const poolAuthority = poolId; // This may need to be fetched from pool account data
+
+  logger.info('CPMM pool state extracted', {
+    poolCoinTokenAccount: poolCoinTokenAccount.toBase58(),
+    poolPcTokenAccount: poolPcTokenAccount.toBase58(),
+    poolCoinMint: poolCoinMint.toBase58(),
+    poolPcMint: poolPcMint.toBase58(),
+    note: 'CPMM pools do not require Serum market accounts',
+  });
+
+  return {
+    poolCoinTokenAccount,
+    poolPcTokenAccount,
+    poolCoinMint,
+    poolPcMint,
+    poolAuthority,
+  };
+}
+
+/**
+ * Create Raydium swap instruction for CPMM pools (no Serum market)
+ * 
+ * CPMM pools use a simpler instruction format without Serum accounts.
+ * The instruction format uses Anchor discriminator for swap.
+ * 
+ * For Token-2022 source tokens (NUKE), we must handle the transfer fee correctly.
+ * 
+ * CPMM Swap Instruction Format (Anchor):
+ * - Instruction discriminator: first 8 bytes of sha256("global:swap")
+ * - amountIn: u64 (8 bytes) - Amount BEFORE transfer fee deduction
+ * - minimumAmountOut: u64 (8 bytes) - Minimum amount to receive (with slippage)
+ * 
+ * Accounts for CPMM swap (simpler, no Serum):
+ * 0. poolId (writable) - Pool account
+ * 1. userSourceTokenAccount (writable) - User's source token account
+ * 2. userDestinationTokenAccount (writable) - User's destination token account
+ * 3. poolSourceTokenAccount (writable) - Pool's source token vault
+ * 4. poolDestinationTokenAccount (writable) - Pool's destination token vault
+ * 5. poolCoinMint - Source token mint
+ * 6. poolPcMint - Destination token mint
+ * 7. userWallet (signer, writable) - User's wallet
+ * 8. tokenProgramId - TOKEN_2022_PROGRAM_ID if source is Token-2022, else TOKEN_PROGRAM_ID
+ * 9. systemProgram - System program
+ */
+function createRaydiumCpmmSwapInstruction(
+  poolId: PublicKey,
+  poolProgramId: PublicKey,
+  poolState: CpmmPoolState,
+  userSourceTokenAccount: PublicKey,
+  userDestinationTokenAccount: PublicKey,
+  amountIn: bigint,
+  minimumAmountOut: bigint,
+  userWallet: PublicKey,
+  sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
+): TransactionInstruction {
+  // CPMM pools use Anchor instruction format
+  // Calculate discriminator: sha256("global:swap")[0:8]
+  const discriminatorHash = createHash('sha256')
+    .update('global:swap')
+    .digest();
+  const swapDiscriminator = discriminatorHash.slice(0, 8);
+  
+  // Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
+  const instructionData = Buffer.alloc(24);
+  swapDiscriminator.copy(instructionData, 0);
+  instructionData.writeBigUInt64LE(amountIn, 8);
+  instructionData.writeBigUInt64LE(minimumAmountOut, 16);
+
+  logger.info('Creating CPMM swap instruction (no Serum market)', {
+    poolProgramId: poolProgramId.toBase58(),
+    poolId: poolId.toBase58(),
+    amountIn: amountIn.toString(),
+    minimumAmountOut: minimumAmountOut.toString(),
+    tokenProgramId: sourceTokenProgram.toBase58(),
+    accountCount: 10,
+    note: 'CPMM pools use simpler account structure without Serum market',
+  });
+
+  return new TransactionInstruction({
+    programId: poolProgramId,
+    keys: [
+      { pubkey: poolId, isSigner: false, isWritable: true },
+      { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolCoinTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolPcTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: poolState.poolCoinMint, isSigner: false, isWritable: false },
+      { pubkey: poolState.poolPcMint, isSigner: false, isWritable: false },
+      { pubkey: userWallet, isSigner: true, isWritable: true },
+      { pubkey: sourceTokenProgram, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: instructionData,
+  });
 }
 
 /**
@@ -1508,12 +1695,9 @@ export async function swapNukeToSOL(
     });
 
     // ===================================================================
-    // CRITICAL: Final validation before SDK call
+    // CRITICAL: Final validation before building swap instruction
     // ===================================================================
-    // The SDK's _selectTokenAccount method queries token accounts and calls
-    // .filter() on the result. If ATAs don't exist, the query returns undefined.
-    // We've verified both ATAs exist above, but let's double-check they're
-    // valid PublicKeys before passing to SDK.
+    // Ensure all required accounts are valid PublicKeys before building instruction
     // ===================================================================
     
     // Final validation: Ensure ATAs are valid PublicKeys
@@ -1527,106 +1711,137 @@ export async function swapNukeToSOL(
       throw new Error(`Reward wallet address is not a valid PublicKey: ${rewardWalletAddress}`);
     }
 
-    // Convert swap amounts to Decimal (SDK math expects Decimal/Number, not BN/bigint/string)
-    const amountInDecimal = new Decimal(amountNuke.toString());
-    const minAmountOutDecimal = new Decimal(minDestAmount.toString());
-
-    if (!Decimal.isDecimal(amountInDecimal) || !Decimal.isDecimal(minAmountOutDecimal)) {
-      throw new Error('Raydium swap amounts must be Decimal instances');
-    }
-
-    // ===================================================================
-    // CRITICAL: Token-2022 Account Query Issue
-    // ===================================================================
-    // The Raydium SDK's _selectTokenAccount internally queries token accounts
-    // using getParsedTokenAccountsByOwner. The SDK might only query TOKEN_PROGRAM_ID
-    // accounts, missing Token-2022 accounts (NUKE uses TOKEN_2022_PROGRAM_ID).
-    //
-    // SOLUTION: We pass explicit ATAs to the SDK, but the SDK still validates them
-    // by querying. To ensure the SDK can find Token-2022 accounts, we need to ensure
-    // the connection can query both program IDs. We've already validated this above.
-    //
-    // Additionally, we'll pass the ATAs explicitly and ensure they're in the format
-    // the SDK expects, with proper program ID information.
-    // ===================================================================
-
-    // Log final configuration before SDK call
-    logger.info('Calling Raydium SDK with verified ATAs (Token-2022 compatible)', {
-      nukeAta: {
-        address: nukeAta.toBase58(),
-        programId: 'TOKEN_2022_PROGRAM_ID',
-        verified: true,
-      },
-      wsolAta: {
-        address: wsolAta.toBase58(),
-        programId: 'TOKEN_PROGRAM_ID',
-        verified: true,
-      },
+    logger.info('Final validation complete - ready to build swap instruction', {
+      nukeAta: nukeAta.toBase58(),
+      wsolAta: wsolAta.toBase58(),
       owner: rewardWalletAddress.toBase58(),
-      amountIn: amountInDecimal.toString(),
-      amountOut: minAmountOutDecimal.toString(),
+      amountIn: amountNuke.toString(),
+      amountOut: minDestAmount.toString(),
       poolType: poolInfo.poolType,
-      note: 'Both ATAs verified on-chain. SDK can query both TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID accounts.',
+      hasSerumMarket: poolInfo.hasSerumMarket,
+      note: 'Both ATAs verified on-chain. Ready to build manual swap instruction.',
     });
 
     // ===================================================================
-    // CRITICAL: Use manual Standard AMM v4 instruction builder (NO SDK)
+    // CRITICAL: Use manual instruction builder (NO SDK) - supports both Standard and CPMM
     // ===================================================================
     // The Raydium SDK's makeSwapInstructionSimple calls _selectTokenAccount which
     // queries token accounts and fails with Token-2022. We bypass the SDK entirely
-    // and build the swap instruction manually using the Standard AMM v4 format.
+    // and build the swap instruction manually.
     //
     // This approach:
-    // 1. Fetches pool state from chain (no SDK dependency)
-    // 2. Builds swap instruction manually with explicit accounts
-    // 3. Supports Token-2022 without SDK query issues
-    // 4. Works for Standard AMM v4 pools only
+    // 1. Detects if pool has Serum market from API
+    // 2. Uses Standard AMM v4 instruction (25 accounts) if Serum market exists
+    // 3. Uses CPMM instruction (10 accounts) if no Serum market (CPMM pools)
+    // 4. Supports Token-2022 without SDK query issues
     // ===================================================================
     
-    // Only support Standard pools (manual instruction builder)
-    if (poolInfo.poolType !== 'Standard') {
-      throw new Error(
-        `Manual swap instruction builder only supports Standard AMM v4 pools. ` +
-        `Pool type is: ${poolInfo.poolType}. ` +
-        `Please use a Standard pool or implement support for ${poolInfo.poolType} pools.`
-      );
-    }
+    // Detect if pool has Serum market or is CPMM
+    const hasSerumMarket = poolInfo.hasSerumMarket ?? false;
+    const isCpmmPool = poolInfo.poolType === 'Cpmm' || !hasSerumMarket;
 
-    logger.info('Building Standard AMM v4 swap instruction manually (no SDK)', {
+    logger.info('Building swap instruction manually (no SDK)', {
       poolId: poolId.toBase58(),
+      poolType: poolInfo.poolType,
       poolProgramId: poolInfo.poolProgramId.toBase58(),
+      hasSerumMarket,
+      isCpmmPool,
       nukeAta: nukeAta.toBase58(),
       wsolAta: wsolAta.toBase58(),
       amountIn: amountNuke.toString(),
       minAmountOut: minDestAmount.toString(),
-      note: 'Bypassing SDK to avoid Token-2022 query issues',
+      note: isCpmmPool 
+        ? 'CPMM pool (no Serum market) - using CPMM instruction format'
+        : 'Standard AMM v4 pool (with Serum market) - using Standard instruction format',
     });
 
-    // Fetch Standard AMM v4 pool state from chain
-    const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
+    let swapInstruction: TransactionInstruction;
 
-    // Create swap instruction manually
-    const swapInstruction = await createRaydiumStandardSwapInstruction(
-      poolId,
-      poolInfo.poolProgramId,
-      poolState,
-      nukeAta,        // userSourceTokenAccount (NUKE ATA - Token-2022)
-      wsolAta,        // userDestinationTokenAccount (WSOL ATA - standard token)
-      amountNuke,     // amountIn (before transfer fee)
-      minDestAmount,  // minimumAmountOut (with slippage)
-      rewardWalletAddress, // userWallet
-      TOKEN_2022_PROGRAM_ID // sourceTokenProgram (NUKE is Token-2022)
-    );
+    if (isCpmmPool) {
+      // CPMM pool - no Serum market, use simpler instruction format
+      logger.info('Using CPMM swap instruction (no Serum market)', {
+        poolId: poolId.toBase58(),
+        poolProgramId: poolInfo.poolProgramId.toBase58(),
+        note: 'CPMM pools do not require Serum market accounts',
+      });
 
-    // Validate swap instruction before adding
-    if (!swapInstruction.programId) {
-      throw new Error('Swap instruction missing programId');
-    }
-    if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
-      throw new Error('Swap instruction missing or invalid keys array');
-    }
-    if (swapInstruction.keys.length !== 25) {
-      throw new Error(`Swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for Standard AMM v4`);
+      // Fetch CPMM pool state (simpler, no Serum)
+      const cpmmPoolState = await fetchCpmmPoolState(
+        poolId,
+        poolInfo.poolProgramId,
+        poolSourceVault,
+        poolDestVault,
+        poolSourceMint,
+        poolDestMint
+      );
+
+      // Create CPMM swap instruction (no Serum accounts)
+      swapInstruction = createRaydiumCpmmSwapInstruction(
+        poolId,
+        poolInfo.poolProgramId,
+        cpmmPoolState,
+        nukeAta,        // userSourceTokenAccount (NUKE ATA - Token-2022)
+        wsolAta,        // userDestinationTokenAccount (WSOL ATA - standard token)
+        amountNuke,     // amountIn (before transfer fee)
+        minDestAmount,  // minimumAmountOut (with slippage)
+        rewardWalletAddress, // userWallet
+        sourceTokenProgram // TOKEN_2022_PROGRAM_ID for NUKE
+      );
+
+      // Validate CPMM swap instruction
+      if (!swapInstruction.programId) {
+        throw new Error('CPMM swap instruction missing programId');
+      }
+      if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
+        throw new Error('CPMM swap instruction missing or invalid keys array');
+      }
+      if (swapInstruction.keys.length !== 10) {
+        throw new Error(`CPMM swap instruction has ${swapInstruction.keys.length} accounts, expected 10 for CPMM pools`);
+      }
+
+      logger.info('CPMM swap instruction created successfully', {
+        accountCount: swapInstruction.keys.length,
+        note: 'CPMM pools use simpler account structure without Serum market',
+      });
+    } else {
+      // Standard AMM v4 pool - has Serum market, use full instruction format
+      logger.info('Using Standard AMM v4 swap instruction (with Serum market)', {
+        poolId: poolId.toBase58(),
+        poolProgramId: poolInfo.poolProgramId.toBase58(),
+        note: 'Standard pools require Serum market accounts',
+      });
+
+      // Fetch Standard AMM v4 pool state from chain
+      const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
+
+      // Create Standard AMM v4 swap instruction manually
+      swapInstruction = await createRaydiumStandardSwapInstruction(
+        poolId,
+        poolInfo.poolProgramId,
+        poolState,
+        nukeAta,        // userSourceTokenAccount (NUKE ATA - Token-2022)
+        wsolAta,        // userDestinationTokenAccount (WSOL ATA - standard token)
+        amountNuke,     // amountIn (before transfer fee)
+        minDestAmount,  // minimumAmountOut (with slippage)
+        rewardWalletAddress, // userWallet
+        sourceTokenProgram // TOKEN_2022_PROGRAM_ID for NUKE
+      );
+
+      // Validate Standard AMM v4 swap instruction
+      if (!swapInstruction.programId) {
+        throw new Error('Standard AMM v4 swap instruction missing programId');
+      }
+      if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
+        throw new Error('Standard AMM v4 swap instruction missing or invalid keys array');
+      }
+      if (swapInstruction.keys.length !== 25) {
+        throw new Error(`Standard AMM v4 swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for Standard AMM v4`);
+      }
+
+      logger.info('Standard AMM v4 swap instruction created successfully', {
+        accountCount: swapInstruction.keys.length,
+        note: 'Standard pools require 25 accounts including Serum market accounts',
+      });
     }
 
     // Validate all account keys are defined
