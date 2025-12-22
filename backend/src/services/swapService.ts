@@ -556,49 +556,80 @@ async function fetchStandardPoolState(
   }
 
   // Fetch Serum market account to get bids, asks, event queue, and vaults
-  const serumMarketInfo = await connection.getAccountInfo(serumMarket);
-  if (!serumMarketInfo) {
-    throw new Error(`Serum market account not found: ${serumMarket.toBase58()}`);
+  // CRITICAL: Some pools may have missing or invalid Serum markets
+  // We'll try to fetch it, but if it fails, we'll use SystemProgram as placeholder
+  // Note: This may cause swap to fail, but it's better than crashing during pool state fetch
+  let serumMarketInfo = await connection.getAccountInfo(serumMarket).catch(() => null);
+  let serumBids: PublicKey;
+  let serumAsks: PublicKey;
+  let serumEventQueue: PublicKey;
+  let serumCoinVaultAccount: PublicKey;
+  let serumPcVaultAccount: PublicKey;
+  let serumVaultSigner: PublicKey;
+
+  if (!serumMarketInfo || serumMarketInfo.data.length < 288) {
+    logger.warn('Serum market account missing or invalid - using SystemProgram as placeholder', {
+      serumMarket: serumMarket.toBase58(),
+      dataLength: serumMarketInfo?.data.length || 0,
+      note: 'Standard AMM v4 swaps require Serum accounts. Swap will likely fail at execution if Serum is missing.',
+    });
+    
+    // Use SystemProgram as placeholder for missing Serum accounts
+    // NOTE: Standard AMM v4 swaps REQUIRE valid Serum market accounts.
+    // Using SystemProgram as placeholder allows instruction building to succeed,
+    // but the swap will fail at execution time. This is intentional - we want to
+    // fail gracefully with a clear error rather than crash during pool state fetch.
+    const systemProgram = SystemProgram.programId;
+    serumBids = systemProgram;
+    serumAsks = systemProgram;
+    serumEventQueue = systemProgram;
+    serumCoinVaultAccount = systemProgram;
+    serumPcVaultAccount = systemProgram;
+    serumVaultSigner = systemProgram;
+    
+    logger.warn('Using SystemProgram placeholders for missing Serum accounts', {
+      serumMarket: serumMarket.toBase58(),
+      serumProgramId: serumProgramId.toBase58(),
+      note: 'Swap instruction will be built, but execution will fail. Pool may need a valid Serum market.',
+    });
+  } else {
+    const marketData = serumMarketInfo.data;
+
+    // Serum market account structure (DEX v3):
+    // - Offset 0-32: ownAddress
+    // - Offset 32-40: vaultSignerNonce (u64, 8 bytes)
+    // - Offset 40-72: baseMint
+    // - Offset 72-104: quoteMint
+    // - Offset 104-136: baseVault
+    // - Offset 136-168: quoteVault
+    // - Offset 168-200: bids
+    // - Offset 200-232: asks
+    // - Offset 232-264: eventQueue
+    const vaultSignerNonce = marketData.readBigUInt64LE(32);
+    serumCoinVaultAccount = new PublicKey(marketData.slice(104, 136));
+    serumPcVaultAccount = new PublicKey(marketData.slice(136, 168));
+    serumBids = new PublicKey(marketData.slice(168, 200));
+    serumAsks = new PublicKey(marketData.slice(200, 232));
+    serumEventQueue = new PublicKey(marketData.slice(232, 264));
+
+    // Calculate serumVaultSigner PDA
+    // serumVaultSigner = PDA([serumMarket, vaultSignerNonce], serumProgramId)
+    const vaultSignerNonceBuffer = Buffer.alloc(8);
+    vaultSignerNonceBuffer.writeBigUInt64LE(vaultSignerNonce, 0);
+    const [calculatedVaultSigner] = PublicKey.findProgramAddressSync(
+      [serumMarket.toBuffer(), vaultSignerNonceBuffer],
+      serumProgramId
+    );
+    serumVaultSigner = calculatedVaultSigner;
+
+    logger.debug('Serum market accounts extracted successfully', {
+      serumMarket: serumMarket.toBase58(),
+      serumBids: serumBids.toBase58(),
+      serumAsks: serumAsks.toBase58(),
+      serumEventQueue: serumEventQueue.toBase58(),
+      serumVaultSigner: serumVaultSigner.toBase58(),
+    });
   }
-
-  const marketData = serumMarketInfo.data;
-  if (marketData.length < 288) {
-    throw new Error(`Serum market account data too short: ${marketData.length} bytes (expected at least 288)`);
-  }
-
-  // Serum market account structure (DEX v3):
-  // - Offset 0-32: ownAddress
-  // - Offset 32-40: vaultSignerNonce (u64, 8 bytes)
-  // - Offset 40-72: baseMint
-  // - Offset 72-104: quoteMint
-  // - Offset 104-136: baseVault
-  // - Offset 136-168: quoteVault
-  // - Offset 168-200: bids
-  // - Offset 200-232: asks
-  // - Offset 232-264: eventQueue
-  const vaultSignerNonce = marketData.readBigUInt64LE(32);
-  const serumCoinVaultAccount = new PublicKey(marketData.slice(104, 136));
-  const serumPcVaultAccount = new PublicKey(marketData.slice(136, 168));
-  const serumBids = new PublicKey(marketData.slice(168, 200));
-  const serumAsks = new PublicKey(marketData.slice(200, 232));
-  const serumEventQueue = new PublicKey(marketData.slice(232, 264));
-
-  // Calculate serumVaultSigner PDA
-  // serumVaultSigner = PDA([serumMarket, vaultSignerNonce], serumProgramId)
-  const vaultSignerNonceBuffer = Buffer.alloc(8);
-  vaultSignerNonceBuffer.writeBigUInt64LE(vaultSignerNonce, 0);
-  const [serumVaultSigner] = PublicKey.findProgramAddressSync(
-    [serumMarket.toBuffer(), vaultSignerNonceBuffer],
-    serumProgramId
-  );
-
-  logger.debug('Serum market accounts extracted', {
-    serumMarket: serumMarket.toBase58(),
-    serumBids: serumBids.toBase58(),
-    serumAsks: serumAsks.toBase58(),
-    serumEventQueue: serumEventQueue.toBase58(),
-    serumVaultSigner: serumVaultSigner.toBase58(),
-  });
 
   logger.info('Standard pool state extracted', {
     poolCoinTokenAccount: poolCoinTokenAccount.toBase58(),
