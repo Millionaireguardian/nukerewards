@@ -1265,6 +1265,28 @@ export async function swapNukeToSOL(
       programId: sdkPoolInfo.programId,
     };
 
+    // CRITICAL: Add version field - SDK requires this for makeSwapInstruction
+    // Version mapping: 4 = Standard AMM v4, 6 = CPMM, 7 = CLMM
+    // Use version from API if available, otherwise infer from pool type
+    if (sdkPoolInfo.version !== undefined) {
+      sdkPoolKeysData.version = sdkPoolInfo.version;
+    } else {
+      // Infer version from pool type
+      const poolTypeLower = (sdkPoolInfo.type || poolInfo.poolType || '').toLowerCase();
+      if (poolTypeLower === 'cpmm') {
+        sdkPoolKeysData.version = 6;
+      } else if (poolTypeLower === 'clmm') {
+        sdkPoolKeysData.version = 7;
+      } else {
+        // Default to Standard AMM v4 (version 4)
+        sdkPoolKeysData.version = 4;
+      }
+      logger.info('Inferred pool version from pool type', {
+        poolType: poolTypeLower,
+        version: sdkPoolKeysData.version,
+      });
+    }
+
     // Only include addresses - extract from nested objects if needed
     if (sdkPoolInfo.mintA?.address) {
       sdkPoolKeysData.mintA = sdkPoolInfo.mintA.address; // Just the address string
@@ -1311,16 +1333,18 @@ export async function swapNukeToSOL(
       }
     });
 
-    // Validate that all included fields are strings (base58 addresses)
-    // This prevents numeric values from being passed to jsonInfo2PoolKeys()
+    // Validate that all included fields are strings (base58 addresses) EXCEPT version
+    // Version is a required numeric field for the SDK
+    // This prevents numeric values from being passed to jsonInfo2PoolKeys() (except version)
     const numericFields = ['openTime', 'feeRate', 'tradeFeeRate', 'protocolFeeRate', 'mintAmountA', 'mintAmountB', 'tvl', 'volume', 'price'];
+    const allowedNumericFields = ['version']; // Version is required by SDK
     for (const key of Object.keys(sdkPoolKeysData)) {
       if (numericFields.includes(key)) {
         logger.warn(`Removing numeric field ${key} from pool keys data (not a public key)`, {
           value: sdkPoolKeysData[key],
         });
         delete sdkPoolKeysData[key];
-      } else if (typeof sdkPoolKeysData[key] !== 'string') {
+      } else if (typeof sdkPoolKeysData[key] !== 'string' && !allowedNumericFields.includes(key)) {
         logger.warn(`Removing non-string field ${key} from pool keys data (expected base58 address)`, {
           type: typeof sdkPoolKeysData[key],
           value: sdkPoolKeysData[key],
@@ -1329,18 +1353,26 @@ export async function swapNukeToSOL(
       }
     }
 
-    logger.debug('Mapped pool info for SDK (only base58 addresses, no numeric metadata)', {
+    logger.debug('Mapped pool info for SDK (base58 addresses + version field)', {
       includedFields: Object.keys(sdkPoolKeysData),
-      note: 'Excluded openTime, feeRate, logoURI, symbol, price, tvl, volume, and all non-address fields',
+      version: sdkPoolKeysData.version,
+      note: 'Included version field (required by SDK). Excluded openTime, feeRate, logoURI, symbol, price, tvl, volume, and other non-address fields',
     });
     
     // Convert to SDK pool keys
-    // This will only receive base58 address strings, no numeric values
+    // This includes base58 address strings and the version field (required by SDK)
     const poolKeys = jsonInfo2PoolKeys(sdkPoolKeysData);
+    
+    // Verify version is set after conversion
+    if (!poolKeys.version) {
+      throw new Error(`Pool keys missing version field after jsonInfo2PoolKeys conversion. Pool type: ${poolInfo.poolType}`);
+    }
 
     logger.info('Pool keys extracted using SDK', {
       programId: poolKeys.programId.toBase58(),
-      version: (poolKeys as any).version,
+      version: poolKeys.version,
+      poolType: poolInfo.poolType,
+      note: 'Version field is required by SDK for makeSwapInstruction',
     });
 
     // Use SDK's makeSwapInstruction - handles ALL pool types (Standard, CPMM, CLMM)
