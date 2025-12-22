@@ -305,7 +305,7 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     lpMint: lpMint?.toBase58(),
     note: hasSerumMarket 
       ? 'Pool has Serum market - will use Standard AMM v4 instruction format (25 accounts)'
-      : 'Pool does not have Serum market - will use AMM v4 Anchor instruction format (13 accounts, swap_base_in)',
+      : 'Pool does not have Serum market - swap will fail (AMM v4 pools REQUIRE Serum)',
   });
 
   return {
@@ -584,9 +584,8 @@ async function fetchStandardPoolState(
   }
 
   // Fetch Serum market account to get bids, asks, event queue, and vaults
-  // CRITICAL: Some pools may have missing or invalid Serum markets
-  // We'll try to fetch it, but if it fails, we'll use SystemProgram as placeholder
-  // Note: This may cause swap to fail, but it's better than crashing during pool state fetch
+  // CRITICAL: Raydium AMM v4 pools REQUIRE valid Serum market accounts
+  // If Serum market is missing or invalid, ABORT immediately - no placeholders, no fallbacks
   let serumMarketInfo = await connection.getAccountInfo(serumMarket).catch(() => null);
   let serumBids: PublicKey;
   let serumAsks: PublicKey;
@@ -596,30 +595,13 @@ async function fetchStandardPoolState(
   let serumVaultSigner: PublicKey;
 
   if (!serumMarketInfo || serumMarketInfo.data.length < 288) {
-    logger.warn('Serum market account missing or invalid - using SystemProgram as placeholder', {
-      serumMarket: serumMarket.toBase58(),
-      dataLength: serumMarketInfo?.data.length || 0,
-      note: 'Standard AMM v4 swaps require Serum accounts. Swap will likely fail at execution if Serum is missing.',
-    });
-    
-    // Use SystemProgram as placeholder for missing Serum accounts
-    // NOTE: Standard AMM v4 swaps REQUIRE valid Serum market accounts.
-    // Using SystemProgram as placeholder allows instruction building to succeed,
-    // but the swap will fail at execution time. This is intentional - we want to
-    // fail gracefully with a clear error rather than crash during pool state fetch.
-    const systemProgram = SystemProgram.programId;
-    serumBids = systemProgram;
-    serumAsks = systemProgram;
-    serumEventQueue = systemProgram;
-    serumCoinVaultAccount = systemProgram;
-    serumPcVaultAccount = systemProgram;
-    serumVaultSigner = systemProgram;
-    
-    logger.warn('Using SystemProgram placeholders for missing Serum accounts', {
-      serumMarket: serumMarket.toBase58(),
-      serumProgramId: serumProgramId.toBase58(),
-      note: 'Swap instruction will be built, but execution will fail. Pool may need a valid Serum market.',
-    });
+    throw new Error(
+      `Serum market account is missing or invalid for Raydium AMM v4 pool. ` +
+      `Pool ID: ${poolId.toBase58()}, Serum Market: ${serumMarket.toBase58()}. ` +
+      `Raydium AMM v4 pools REQUIRE valid Serum market accounts for swaps. ` +
+      `Data length: ${serumMarketInfo?.data.length || 0} (expected at least 288 bytes). ` +
+      `No fallback instruction exists - swap must fail if Serum is missing.`
+    );
   } else {
     const marketData = serumMarketInfo.data;
 
@@ -847,110 +829,23 @@ function createRaydiumCpmmSwapInstruction(
 }
 
 /**
- * Create Raydium AMM v4 Anchor swap instruction for pools WITHOUT Serum market
- * 
- * This is for AMM v4 pools that don't have Serum markets. They still use AMM v4 program
- * but with Anchor instruction format (swap_base_in) instead of the legacy format.
- * 
- * AMM v4 Anchor Swap Instruction Format:
- * - Instruction discriminator: first 8 bytes of sha256("global:swap_base_in")
- * - amountIn: u64 (8 bytes) - Amount BEFORE transfer fee deduction
- * - minimumAmountOut: u64 (8 bytes) - Minimum amount to receive (with slippage)
- * 
- * Accounts for AMM v4 Anchor swap (without Serum):
- * 0. ammTargetOrders (writable)
- * 1. poolCoinTokenAccount (writable) - Pool's source token vault
- * 2. poolPcTokenAccount (writable) - Pool's destination token vault
- * 3. poolWithdrawQueue (writable)
- * 4. poolTempLpTokenAccount (writable)
- * 5. userSourceTokenAccount (writable) - User's source token account
- * 6. userDestinationTokenAccount (writable) - User's destination token account
- * 7. userSourceOwner (signer, writable) - User's wallet
- * 8. poolCoinMint - Source token mint
- * 9. poolPcMint - Destination token mint
- * 10. poolId (writable) - Pool account
- * 11. poolAuthority - Pool authority
- * 12. tokenProgramId - TOKEN_2022_PROGRAM_ID if source is Token-2022, else TOKEN_PROGRAM_ID
- */
-async function createRaydiumAmmV4AnchorSwapInstruction(
-  poolId: PublicKey,
-  poolProgramId: PublicKey,
-  poolState: StandardPoolState,
-  userSourceTokenAccount: PublicKey,
-  userDestinationTokenAccount: PublicKey,
-  amountIn: bigint,
-  minimumAmountOut: bigint,
-  userWallet: PublicKey,
-  sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
-): Promise<TransactionInstruction> {
-  // AMM v4 Anchor instruction uses discriminator for "swap_base_in"
-  // Calculate discriminator: sha256("global:swap_base_in")[0:8]
-  const discriminatorHash = createHash('sha256')
-    .update('global:swap_base_in')
-    .digest();
-  const swapDiscriminator = discriminatorHash.slice(0, 8);
-  
-  // Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
-  const instructionData = Buffer.alloc(24);
-  swapDiscriminator.copy(instructionData, 0);
-  instructionData.writeBigUInt64LE(amountIn, 8);
-  instructionData.writeBigUInt64LE(minimumAmountOut, 16);
-
-  logger.info('Creating AMM v4 Anchor swap instruction (no Serum market)', {
-    poolProgramId: poolProgramId.toBase58(),
-    poolId: poolId.toBase58(),
-    amountIn: amountIn.toString(),
-    minimumAmountOut: minimumAmountOut.toString(),
-    tokenProgramId: sourceTokenProgram.toBase58(),
-    discriminator: swapDiscriminator.toString('hex'),
-    accountCount: 13,
-    note: 'AMM v4 pools without Serum use Anchor format (swap_base_in)',
-  });
-
-  // Build account list for AMM v4 Anchor swap (without Serum accounts)
-  return new TransactionInstruction({
-    programId: poolProgramId,
-    keys: [
-      // 0-4: Pool accounts (same as Standard, but no Serum)
-      { pubkey: poolState.ammTargetOrders, isSigner: false, isWritable: true },
-      { pubkey: poolState.poolCoinTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: poolState.poolPcTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: poolState.poolWithdrawQueue, isSigner: false, isWritable: true },
-      { pubkey: poolState.poolTempLpTokenAccount, isSigner: false, isWritable: true },
-      // 5-6: User accounts
-      { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
-      // 7: User wallet (signer)
-      { pubkey: userWallet, isSigner: true, isWritable: true },
-      // 8-9: Mint accounts
-      { pubkey: poolState.poolCoinMint, isSigner: false, isWritable: false },
-      { pubkey: poolState.poolPcMint, isSigner: false, isWritable: false },
-      // 10: Pool account
-      { pubkey: poolId, isSigner: false, isWritable: true },
-      // 11: Pool authority
-      { pubkey: poolState.poolAuthority, isSigner: false, isWritable: false },
-      // 12: Token program
-      { pubkey: sourceTokenProgram, isSigner: false, isWritable: false },
-    ],
-    data: instructionData,
-  });
-}
-
-/**
  * Create Raydium swap instruction for Standard AMM v4 pools
  * 
  * Standard pools use different program IDs depending on network:
  * - Devnet: Pool-specific program ID from API (e.g., DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb)
  * - Mainnet: Generic Raydium AMM v4 program ID (675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8)
  * 
- * The instruction format uses discriminator 9 (0x09) for swap.
+ * CRITICAL: Raydium AMM v4 uses Anchor instruction format with swap_base_in discriminator
+ * - Instruction discriminator: first 8 bytes of sha256("global:swap_base_in")
+ * - This is the ONLY valid instruction format for AMM v4 swaps
+ * - Serum market accounts are REQUIRED - all 25 accounts must be included
  * 
  * For Token-2022 source tokens (NUKE), we must handle the transfer fee correctly.
  * The amountIn is the amount we want to swap, and the transfer fee will be deducted
  * during the token transfer, so the pool receives amountIn * (1 - transferFeeBps/10000).
  * 
- * Standard AMM v4 Swap Instruction Format:
- * - Instruction discriminator: 9 (0x09)
+ * Standard AMM v4 Swap Instruction Format (Anchor):
+ * - Instruction discriminator: first 8 bytes of sha256("global:swap_base_in")
  * - amountIn: u64 (8 bytes) - Amount BEFORE transfer fee deduction
  * - minimumAmountOut: u64 (8 bytes) - Minimum amount to receive (with slippage)
  * 
@@ -992,23 +887,28 @@ async function createRaydiumStandardSwapInstruction(
   userWallet: PublicKey,
   sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
 ): Promise<TransactionInstruction> {
-  // Standard AMM v4 swap instruction discriminator: 9 (0x09)
-  const SWAP_DISCRIMINATOR = 9;
+  // CRITICAL: Raydium AMM v4 uses Anchor instruction format with swap_base_in discriminator
+  // Calculate discriminator: sha256("global:swap_base_in")[0:8]
+  const discriminatorHash = createHash('sha256')
+    .update('global:swap_base_in')
+    .digest();
+  const swapDiscriminator = discriminatorHash.slice(0, 8);
   
-  // Instruction layout: [1-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 17 bytes total
-  const instructionData = Buffer.alloc(17);
-  instructionData.writeUInt8(SWAP_DISCRIMINATOR, 0);
-  instructionData.writeBigUInt64LE(amountIn, 1);
-  instructionData.writeBigUInt64LE(minimumAmountOut, 9);
+  // Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
+  const instructionData = Buffer.alloc(24);
+  swapDiscriminator.copy(instructionData, 0);
+  instructionData.writeBigUInt64LE(amountIn, 8);
+  instructionData.writeBigUInt64LE(minimumAmountOut, 16);
 
-  logger.info('Creating Standard AMM v4 swap instruction with full account list', {
+  logger.info('Creating Standard AMM v4 swap instruction with full account list (Anchor format)', {
     poolProgramId: poolProgramId.toBase58(),
     poolId: poolId.toBase58(),
     amountIn: amountIn.toString(),
     minimumAmountOut: minimumAmountOut.toString(),
     tokenProgramId: sourceTokenProgram.toBase58(),
+    discriminator: swapDiscriminator.toString('hex'),
     accountCount: 25,
-    note: 'Standard pools require 25 accounts including Serum market accounts',
+    note: 'AMM v4 pools REQUIRE 25 accounts including all Serum market accounts - using Anchor swap_base_in format',
   });
 
   // Build complete account list (25 accounts as per Standard AMM v4 specification)
@@ -1813,13 +1713,12 @@ export async function swapNukeToSOL(
     });
 
     // ===================================================================
-    // CRITICAL: Pool classification based on PROGRAM ID ONLY
+    // CRITICAL: Raydium AMM v4 pools REQUIRE Serum market
     // ===================================================================
-    // Rule: If pool uses AMM v4 program ID, ALWAYS use AMM v4 instruction format
-    // - AMM v4 pools can exist WITHOUT Serum market
-    // - Missing Serum does NOT mean CPMM - Serum is OPTIONAL for AMM v4
-    // - Program ID determines instruction format, NOT Serum presence
-    // - CPMM logic is REMOVED - only AMM v4 pools are supported
+    // Rule: Raydium AMM v4 pools CANNOT perform swaps without Serum market
+    // - There is NO such thing as a valid AMM v4 swap without Serum
+    // - Missing Serum = swap must fail immediately
+    // - No fallback, no placeholder, no bypass
     // ===================================================================
     
     // Check if pool is AMM v4 (mainnet or devnet program IDs)
@@ -1832,83 +1731,72 @@ export async function swapNukeToSOL(
     if (!isAmmV4Pool) {
       throw new Error(
         `Unsupported pool program ID: ${poolInfo.poolProgramId.toBase58()}. ` +
-        `Only Raydium AMM v4 pools (DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb or 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8) are supported. ` +
-        `CPMM pools are not supported.`
+        `Only Raydium AMM v4 pools (DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb or 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8) are supported.`
       );
     }
 
+    // CRITICAL: Validate Serum market is present
     const hasSerumMarket = poolInfo.hasSerumMarket ?? false;
+    if (!hasSerumMarket) {
+      throw new Error(
+        `Invalid Raydium AMM v4 pool: Serum market is REQUIRED for swaps. ` +
+        `Pool ID: ${poolId.toBase58()}, Program ID: ${poolInfo.poolProgramId.toBase58()}. ` +
+        `Raydium AMM v4 pools cannot perform swaps without Serum market. ` +
+        `If Serum is missing, the swap must fail. No fallback instruction exists.`
+      );
+    }
     
-    logger.info('Building Raydium AMM v4 swap instruction', {
+    logger.info('Building Raydium AMM v4 swap instruction with Serum market', {
       poolId: poolId.toBase58(),
       poolProgramId: poolInfo.poolProgramId.toBase58(),
-      hasSerumMarket,
       nukeAta: nukeAta.toBase58(),
       wsolAta: wsolAta.toBase58(),
       amountIn: amountNuke.toString(),
       minAmountOut: minDestAmount.toString(),
-      note: hasSerumMarket 
-        ? 'AMM v4 pool with Serum market - using full 25-account instruction'
-        : 'AMM v4 pool without Serum market - using AMM v4 Anchor instruction format (swap_base_in)',
+      note: 'AMM v4 pools REQUIRE Serum market - using full 25-account instruction',
     });
 
     // ===================================================================
-    // CRITICAL: AMM v4 pools ALWAYS use AMM v4 instruction format
+    // CRITICAL: AMM v4 pools ALWAYS require Serum - build 25-account instruction
     // ===================================================================
-    // Serum market is OPTIONAL for AMM v4 pools:
-    // - With Serum: Use 25-account instruction (legacy format)
-    // - Without Serum: Use 13-account Anchor instruction (swap_base_in)
+    // Raydium AMM v4 swaps MUST include all Serum accounts:
+    // - serumMarket, serumProgramId, serumBids, serumAsks, serumEventQueue
+    // - serumCoinVaultAccount, serumPcVaultAccount, serumVaultSigner
+    // - Total: 25 accounts (AMM accounts + Serum accounts + user accounts)
     // ===================================================================
     
-    // Fetch AMM v4 pool state from chain
+    // Fetch AMM v4 pool state from chain (includes Serum market data)
     const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
 
-    let swapInstruction: TransactionInstruction;
-
-    if (hasSerumMarket) {
-      // AMM v4 with Serum - use full 25-account instruction (legacy format)
-      logger.info('Creating AMM v4 swap instruction with Serum market (25 accounts)', {
-        poolId: poolId.toBase58(),
-        poolProgramId: poolInfo.poolProgramId.toBase58(),
-      });
-
-      swapInstruction = await createRaydiumStandardSwapInstruction(
-        poolId,
-        poolInfo.poolProgramId,
-        poolState,
-        nukeAta,
-        wsolAta,
-        amountNuke,
-        minDestAmount,
-        rewardWalletAddress,
-        sourceTokenProgram
-      );
-
-      // Validate Standard AMM v4 swap instruction
-      if (swapInstruction.keys.length !== 25) {
-        throw new Error(`Standard AMM v4 swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for AMM v4 with Serum`);
-      }
-    } else {
-      // AMM v4 without Serum - use AMM v4 Anchor instruction format (swap_base_in)
-      // This is the CORRECT instruction format for AMM v4 pools without Serum
-      logger.info('Creating AMM v4 Anchor swap instruction without Serum market (13 accounts)', {
-        poolId: poolId.toBase58(),
-        poolProgramId: poolInfo.poolProgramId.toBase58(),
-        note: 'Using swap_base_in Anchor instruction format - Serum accounts are omitted',
-      });
-
-      swapInstruction = await createRaydiumAmmV4AnchorSwapInstruction(
-        poolId,
-        poolInfo.poolProgramId,
-        poolState,
-        nukeAta,
-        wsolAta,
-        amountNuke,
-        minDestAmount,
-        rewardWalletAddress,
-        sourceTokenProgram
+    // Validate that Serum market data was successfully fetched
+    if (!poolState.serumMarket || poolState.serumMarket.equals(SystemProgram.programId)) {
+      throw new Error(
+        `Serum market data is missing or invalid for AMM v4 pool. ` +
+        `Pool ID: ${poolId.toBase58()}. ` +
+        `Serum market is REQUIRED for Raydium AMM v4 swaps. ` +
+        `Failed to fetch valid Serum market account from pool state.`
       );
     }
+
+    // Build AMM v4 swap instruction with Serum (25 accounts)
+    logger.info('Creating AMM v4 swap instruction with Serum market (25 accounts)', {
+      poolId: poolId.toBase58(),
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
+      serumMarket: poolState.serumMarket.toBase58(),
+      serumProgramId: poolState.serumProgramId.toBase58(),
+    });
+
+    const swapInstruction = await createRaydiumStandardSwapInstruction(
+      poolId,
+      poolInfo.poolProgramId,
+      poolState,
+      nukeAta,
+      wsolAta,
+      amountNuke,
+      minDestAmount,
+      rewardWalletAddress,
+      sourceTokenProgram
+    );
 
     // Validate AMM v4 swap instruction
     if (!swapInstruction.programId) {
@@ -1917,13 +1805,17 @@ export async function swapNukeToSOL(
     if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
       throw new Error('AMM v4 swap instruction missing or invalid keys array');
     }
+    if (swapInstruction.keys.length !== 25) {
+      throw new Error(
+        `AMM v4 swap instruction has ${swapInstruction.keys.length} accounts, expected 25. ` +
+        `Raydium AMM v4 swaps require exactly 25 accounts including all Serum market accounts.`
+      );
+    }
 
     logger.info('AMM v4 swap instruction created successfully', {
       accountCount: swapInstruction.keys.length,
-      hasSerumMarket,
-      note: hasSerumMarket 
-        ? 'AMM v4 with Serum market (25 accounts - legacy format)'
-        : 'AMM v4 without Serum market (13 accounts - Anchor swap_base_in format)',
+      serumMarket: poolState.serumMarket.toBase58(),
+      note: 'AMM v4 with Serum market (25 accounts) - all required accounts included',
     });
 
 
