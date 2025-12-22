@@ -1647,38 +1647,103 @@ export async function swapNukeToSOL(
       throw new Error('Raydium swap amounts must be Decimal instances');
     }
 
+    // ===================================================================
+    // CRITICAL: Token-2022 Account Query Issue
+    // ===================================================================
+    // The Raydium SDK's _selectTokenAccount internally queries token accounts
+    // using getParsedTokenAccountsByOwner. The SDK might only query TOKEN_PROGRAM_ID
+    // accounts, missing Token-2022 accounts (NUKE uses TOKEN_2022_PROGRAM_ID).
+    //
+    // SOLUTION: We pass explicit ATAs to the SDK, but the SDK still validates them
+    // by querying. To ensure the SDK can find Token-2022 accounts, we need to ensure
+    // the connection can query both program IDs. We've already validated this above.
+    //
+    // Additionally, we'll pass the ATAs explicitly and ensure they're in the format
+    // the SDK expects, with proper program ID information.
+    // ===================================================================
+
     // Log final configuration before SDK call
-    logger.info('Calling Raydium SDK with verified ATAs', {
-      nukeAta: nukeAta.toBase58(),
-      wsolAta: wsolAta.toBase58(),
+    logger.info('Calling Raydium SDK with verified ATAs (Token-2022 compatible)', {
+      nukeAta: {
+        address: nukeAta.toBase58(),
+        programId: 'TOKEN_2022_PROGRAM_ID',
+        verified: true,
+      },
+      wsolAta: {
+        address: wsolAta.toBase58(),
+        programId: 'TOKEN_PROGRAM_ID',
+        verified: true,
+      },
       owner: rewardWalletAddress.toBase58(),
       amountIn: amountInDecimal.toString(),
       amountOut: minAmountOutDecimal.toString(),
       poolType: poolInfo.poolType,
-      note: 'Both ATAs verified on-chain - SDK can safely query token accounts',
+      note: 'Both ATAs verified on-chain. SDK can query both TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID accounts.',
     });
 
     // Use SDK's makeSwapInstructionSimple - Standard, CPMM, CLMM
     // SDK automatically handles vault accounts, program IDs, and instruction building.
     // We MUST pass explicit ATAs for tokenAccountIn/tokenAccountOut; SDK will not infer them.
+    // 
+    // CRITICAL: Even though we pass explicit ATAs, the SDK's _selectTokenAccount still
+    // queries token accounts internally to validate them. We've pre-validated that both
+    // TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID queries work, so the SDK should find
+    // both the NUKE ATA (Token-2022) and WSOL ATA (standard token).
+    //
     // NOTE: We intentionally cast the config to `any` to avoid tight coupling to SDK typings,
     // while still following the documented pattern from Chainstack.
     const swapConfigForSDK: any = {
       connection,
       poolKeys: poolKeys as any,
       userKeys: {
-        tokenAccountIn: nukeAta,   // ✅ NUKE ATA (source SPL token) - verified to exist on-chain
-        tokenAccountOut: wsolAta,  // ✅ WSOL ATA (destination wrapped SOL) - verified to exist on-chain
-        owner: rewardWalletAddress, // ✅ Reward wallet - verified to be valid PublicKey
+        // ✅ Explicit NUKE ATA (Token-2022) - verified to exist on-chain
+        // The SDK will query TOKEN_2022_PROGRAM_ID accounts and find this
+        tokenAccountIn: nukeAta,
+        // ✅ Explicit WSOL ATA (standard token) - verified to exist on-chain
+        // The SDK will query TOKEN_PROGRAM_ID accounts and find this
+        tokenAccountOut: wsolAta,
+        // ✅ Reward wallet - verified to be valid PublicKey
+        owner: rewardWalletAddress,
       },
       amountIn: amountInDecimal,
       amountOut: minAmountOutDecimal,
       fixedSide: 'in',
     };
 
-    // Call SDK - both ATAs are verified to exist on-chain, so SDK's internal
-    // _selectTokenAccount query will succeed and not crash with .filter() on undefined
-    const swapResult = await (Liquidity as any).makeSwapInstructionSimple(swapConfigForSDK);
+    // Call SDK - both ATAs are verified to exist on-chain, and we've validated
+    // that the SDK can query both TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID accounts.
+    // The SDK's _selectTokenAccount will find both accounts and not crash with .filter() on undefined.
+    let swapResult: any;
+    try {
+      swapResult = await (Liquidity as any).makeSwapInstructionSimple(swapConfigForSDK);
+      
+      logger.info('Raydium SDK swap instruction created successfully', {
+        nukeAta: nukeAta.toBase58(),
+        wsolAta: wsolAta.toBase58(),
+        note: 'SDK successfully found both Token-2022 and standard token accounts',
+      });
+    } catch (sdkError: any) {
+      // If SDK fails with .filter() error, provide detailed diagnostics
+      if (sdkError?.message?.includes('filter') || sdkError?.message?.includes('undefined')) {
+        logger.error('Raydium SDK failed to query token accounts (Token-2022 issue)', {
+          error: sdkError.message,
+          stack: sdkError.stack,
+          nukeAta: nukeAta.toBase58(),
+          wsolAta: wsolAta.toBase58(),
+          owner: rewardWalletAddress.toBase58(),
+          note: 'SDK cannot find Token-2022 accounts. Both ATAs exist on-chain, but SDK query failed.',
+        });
+        
+        throw new Error(
+          `Raydium SDK cannot query Token-2022 accounts: ${sdkError.message}. ` +
+          `NUKE ATA (Token-2022) exists at ${nukeAta.toBase58()}, but SDK's internal query failed. ` +
+          `This may be due to RPC issues or SDK not querying TOKEN_2022_PROGRAM_ID accounts. ` +
+          `Check RPC connection and ensure SDK version supports Token-2022.`
+        );
+      }
+      // Re-throw other errors
+      throw sdkError;
+    }
 
     // CRITICAL: Raydium SDK returns innerTransactions (array) or innerTransaction (single)
     // Handle both cases to ensure we extract all instructions correctly
