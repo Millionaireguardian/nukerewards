@@ -1188,13 +1188,18 @@ export async function swapNukeToSOL(
     // CRITICAL: WSOL ATA MUST EXIST BEFORE CALLING RAYDIUM SDK
     // ===================================================================
     // When swapping SPL token → SOL, Raydium requires a WSOL (Wrapped SOL)
-    // Associated Token Account (ATA) as the destination. If this account doesn't
-    // exist, the SDK will create instructions referencing an undefined account,
-    // causing "Cannot read properties of undefined (reading 'toString')" when
-    // Solana tries to compile the transaction.
+    // Associated Token Account (ATA) as the destination. The SDK internally
+    // loads all token accounts for the owner and calls `.filter()` on the
+    // token account list. If the WSOL ATA doesn't exist on-chain, this list
+    // is undefined and the SDK throws:
+    //   "Cannot read properties of undefined (reading 'filter')".
     //
-    // SOLUTION: Check if WSOL ATA exists BEFORE calling SDK, and if missing,
-    // add createAssociatedTokenAccountInstruction BEFORE SDK instructions.
+    // IMPORTANT:
+    // - We CANNOT safely create the WSOL ATA in the SAME transaction where
+    //   we call `makeSwapInstructionSimple`, because the SDK queries accounts
+    //   BEFORE our create instruction is executed.
+    // - Therefore, WSOL ATA must be created ONCE up front (via CLI or an
+    //   initialization script) and then reused for all swaps.
     // ===================================================================
     
     // Step 8: Check WSOL ATA existence BEFORE building transaction
@@ -1205,10 +1210,11 @@ export async function swapNukeToSOL(
       userSolAccountExists = true;
       logger.info('WSOL ATA exists', { userSolAccount: wsolAta.toBase58() });
     } catch {
-      // Account doesn't exist - we'll create it
+      // Account doesn't exist - this MUST be created out-of-band (once per wallet)
       userSolAccountExists = false;
-      logger.info('WSOL ATA missing - will create before swap', { 
-        userSolAccount: wsolAta.toBase58() 
+      logger.error('WSOL ATA is missing for reward wallet', {
+        userSolAccount: wsolAta.toBase58(),
+        note: 'Create this ATA once using spl-token or an init script BEFORE running swaps',
       });
     }
 
@@ -1227,11 +1233,20 @@ export async function swapNukeToSOL(
 
     logger.info('Account existence checks (BEFORE SDK call)', {
       rewardNukeAccount: rewardNukeAccountExists ? 'exists' : 'missing',
-      userSolAccount: userSolAccountExists ? 'exists' : 'missing (will create)',
+      userSolAccount: userSolAccountExists ? 'exists' : 'missing',
       nukeAta: nukeAta.toBase58(),
       wsolAta: wsolAta.toBase58(),
-      note: 'WSOL ATA must exist or be created BEFORE Raydium SDK instructions are added',
+      note: 'WSOL ATA must exist ON-CHAIN before calling Raydium SDK',
     });
+
+    // If WSOL ATA is missing, abort with clear, actionable error.
+    // This prevents the SDK from crashing with `.filter` on undefined.
+    if (!userSolAccountExists) {
+      throw new Error(
+        `WSOL ATA for reward wallet does not exist: ${wsolAta.toBase58()}. ` +
+        `Create it once with: spl-token create-account WSOL --owner ${rewardWalletAddress.toBase58()}`
+      );
+    }
 
     // Step 9: Build transaction
     const transaction = new Transaction();
@@ -1242,47 +1257,10 @@ export async function swapNukeToSOL(
       transaction.add(instruction);
     }
     
-    // CRITICAL: Create WSOL ATA if missing - MUST be added BEFORE SDK instructions
-    // This ensures the account exists when SDK instructions reference it
-    if (!userSolAccountExists) {
-      logger.info('Adding WSOL ATA creation instruction BEFORE SDK instructions', {
-        userSolAccount: wsolAta.toBase58(),
-        payer: rewardWalletAddress.toBase58(),
-      });
-      
-      const createWSOLInstruction = createAssociatedTokenAccountInstruction(
-        rewardWalletAddress, // payer
-        wsolAta,             // ata
-        rewardWalletAddress, // owner
-        NATIVE_MINT,         // WSOL mint
-        TOKEN_PROGRAM_ID     // SPL Token program
-      );
-      
-      // Validate the instruction before adding
-      if (!createWSOLInstruction.programId) {
-        throw new Error('WSOL ATA creation instruction missing programId');
-      }
-      if (!createWSOLInstruction.keys || createWSOLInstruction.keys.length === 0) {
-        throw new Error('WSOL ATA creation instruction missing keys');
-      }
-      
-      // Validate all keys have valid pubkeys
-      for (const key of createWSOLInstruction.keys) {
-        if (!key || !key.pubkey) {
-          throw new Error('WSOL ATA creation instruction has undefined account key');
-        }
-        try {
-          key.pubkey.toString(); // Verify it's a valid PublicKey
-        } catch (error) {
-          throw new Error(`WSOL ATA creation instruction has invalid pubkey: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      
-      transaction.add(createWSOLInstruction);
-      logger.info('WSOL ATA creation instruction added to transaction', {
-        instructionIndex: transaction.instructions.length - 1,
-      });
-    }
+    // NOTE: We NO LONGER attempt to create the WSOL ATA inside this swap
+    // transaction. The ATA must be created once ahead of time. This avoids
+    // Raydium SDK failures when it queries token accounts before our create
+    // instruction is executed.
 
     // For non-Standard pools, verify pool vaults exist (Standard pools use SDK which handles this)
     if (poolInfo.poolType !== 'Standard') {
