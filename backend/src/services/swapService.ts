@@ -1202,53 +1202,106 @@ export async function swapNukeToSOL(
     //   initialization script) and then reused for all swaps.
     // ===================================================================
     
-    // Step 8: Check WSOL ATA existence BEFORE building transaction
-    // Use getAccount (SPL Token) instead of getAccountInfo for reliable token account checks
-    let userSolAccountExists = false;
+    // ===================================================================
+    // CRITICAL: Verify BOTH ATAs exist ON-CHAIN before calling SDK
+    // ===================================================================
+    // The Raydium SDK's makeSwapInstructionSimple internally calls
+    // _selectTokenAccount which queries token accounts and calls .filter()
+    // on the result. If the ATAs don't exist on-chain, the SDK's internal
+    // query returns undefined, causing:
+    //   "Cannot read properties of undefined (reading 'filter')"
+    //
+    // SOLUTION: Verify both ATAs exist on-chain BEFORE calling the SDK.
+    // These ATAs must be created once per wallet (not during swaps).
+    // ===================================================================
+    
+    // Step 8: Verify NUKE ATA exists on-chain (REQUIRED for swap)
+    let rewardNukeAccountExists = false;
+    let nukeAccountInfo = null;
     try {
-      await getAccount(connection, wsolAta, 'confirmed', TOKEN_PROGRAM_ID);
-      userSolAccountExists = true;
-      logger.info('WSOL ATA exists', { userSolAccount: wsolAta.toBase58() });
-    } catch {
-      // Account doesn't exist - this MUST be created out-of-band (once per wallet)
-      userSolAccountExists = false;
-      logger.error('WSOL ATA is missing for reward wallet', {
-        userSolAccount: wsolAta.toBase58(),
-        note: 'Create this ATA once using spl-token or an init script BEFORE running swaps',
+      nukeAccountInfo = await getAccount(connection, nukeAta, 'confirmed', TOKEN_2022_PROGRAM_ID);
+      rewardNukeAccountExists = true;
+      logger.info('NUKE ATA verified on-chain', {
+        nukeAta: nukeAta.toBase58(),
+        balance: nukeAccountInfo.amount.toString(),
+        mint: nukeAccountInfo.mint.toBase58(),
+        owner: nukeAccountInfo.owner.toBase58(),
+      });
+    } catch (error) {
+      rewardNukeAccountExists = false;
+      logger.error('NUKE ATA does not exist on-chain', {
+        nukeAta: nukeAta.toBase58(),
+        error: error instanceof Error ? error.message : String(error),
+        note: 'Create this ATA once using create-nuke-ata.ts script BEFORE running swaps',
       });
     }
 
-    // Verify source NUKE account exists (required for swap)
-    let rewardNukeAccountExists = false;
-    try {
-      await getAccount(connection, nukeAta, 'confirmed', TOKEN_2022_PROGRAM_ID);
-      rewardNukeAccountExists = true;
-    } catch {
-      // Account doesn't exist or error
-    }
-
     if (!rewardNukeAccountExists) {
-      throw new Error(`Reward NUKE ATA does not exist: ${nukeAta.toBase58()}`);
+      throw new Error(
+        `Reward NUKE ATA does not exist on-chain: ${nukeAta.toBase58()}. ` +
+        `Create it once by running: cd backend && npx tsx create-nuke-ata.ts`
+      );
     }
 
-    logger.info('Account existence checks (BEFORE SDK call)', {
-      rewardNukeAccount: rewardNukeAccountExists ? 'exists' : 'missing',
-      userSolAccount: userSolAccountExists ? 'exists' : 'missing',
-      nukeAta: nukeAta.toBase58(),
-      wsolAta: wsolAta.toBase58(),
-      note: 'WSOL ATA must exist ON-CHAIN before calling Raydium SDK',
-    });
+    // Step 9: Verify WSOL ATA exists on-chain (REQUIRED for swap)
+    let userSolAccountExists = false;
+    let wsolAccountInfo = null;
+    try {
+      wsolAccountInfo = await getAccount(connection, wsolAta, 'confirmed', TOKEN_PROGRAM_ID);
+      userSolAccountExists = true;
+      logger.info('WSOL ATA verified on-chain', {
+        wsolAta: wsolAta.toBase58(),
+        balance: wsolAccountInfo.amount.toString(),
+        mint: wsolAccountInfo.mint.toBase58(),
+        owner: wsolAccountInfo.owner.toBase58(),
+      });
+    } catch (error) {
+      userSolAccountExists = false;
+      logger.error('WSOL ATA does not exist on-chain', {
+        wsolAta: wsolAta.toBase58(),
+        error: error instanceof Error ? error.message : String(error),
+        note: 'Create this ATA once using create-wsol-atas.ts script BEFORE running swaps',
+      });
+    }
 
     // If WSOL ATA is missing, abort with clear, actionable error.
     // This prevents the SDK from crashing with `.filter` on undefined.
     if (!userSolAccountExists) {
       throw new Error(
-        `WSOL ATA for reward wallet does not exist: ${wsolAta.toBase58()}. ` +
-        `Create it once with: spl-token create-account WSOL --owner ${rewardWalletAddress.toBase58()}`
+        `WSOL ATA for reward wallet does not exist on-chain: ${wsolAta.toBase58()}. ` +
+        `Create it once by running: cd backend && npx tsx create-wsol-atas.ts`
       );
     }
 
-    // Step 9: Build transaction
+    // Final validation: Both ATAs must exist and be accessible
+    logger.info('All ATAs verified on-chain (BEFORE SDK call)', {
+      nukeAta: {
+        address: nukeAta.toBase58(),
+        exists: rewardNukeAccountExists,
+        balance: nukeAccountInfo?.amount.toString() || '0',
+      },
+      wsolAta: {
+        address: wsolAta.toBase58(),
+        exists: userSolAccountExists,
+        balance: wsolAccountInfo?.amount.toString() || '0',
+      },
+      owner: rewardWalletAddress.toBase58(),
+      note: 'Both ATAs verified on-chain - SDK can safely query token accounts',
+    });
+
+    // ===================================================================
+    // CRITICAL: Do NOT create ATAs during swap transaction
+    // ===================================================================
+    // ATAs (NUKE and WSOL) must exist on-chain BEFORE calling the SDK.
+    // Creating them in the same transaction as the swap will cause the SDK
+    // to fail because it queries accounts BEFORE our create instruction executes.
+    // 
+    // ATAs are created once per wallet using:
+    // - create-nuke-ata.ts (for NUKE ATA)
+    // - create-wsol-atas.ts (for WSOL ATA)
+    // ===================================================================
+    
+    // Step 10: Build transaction (ATAs already verified to exist)
     const transaction = new Transaction();
     
     // Add compute budget instructions first (required for reliable execution)
@@ -1257,10 +1310,8 @@ export async function swapNukeToSOL(
       transaction.add(instruction);
     }
     
-    // NOTE: We NO LONGER attempt to create the WSOL ATA inside this swap
-    // transaction. The ATA must be created once ahead of time. This avoids
-    // Raydium SDK failures when it queries token accounts before our create
-    // instruction is executed.
+    // NOTE: We DO NOT create ATAs here - they must exist on-chain already.
+    // Both NUKE ATA and WSOL ATA have been verified to exist above.
 
     // For non-Standard pools, verify pool vaults exist (Standard pools use SDK which handles this)
     if (poolInfo.poolType !== 'Standard') {
@@ -1463,11 +1514,26 @@ export async function swapNukeToSOL(
       note: 'Version field is required by SDK for makeSwapInstruction',
     });
 
-    // Use SDK's makeSwapInstructionSimple - Standard, CPMM, CLMM
-    // SDK automatically handles vault accounts, program IDs, and instruction building.
-    // We MUST pass explicit ATAs for tokenAccountIn/tokenAccountOut; SDK will not infer them.
-    // NOTE: We intentionally cast the config to `any` to avoid tight coupling to SDK typings,
-    // while still following the documented pattern from Chainstack.
+    // ===================================================================
+    // CRITICAL: Final validation before SDK call
+    // ===================================================================
+    // The SDK's _selectTokenAccount method queries token accounts and calls
+    // .filter() on the result. If ATAs don't exist, the query returns undefined.
+    // We've verified both ATAs exist above, but let's double-check they're
+    // valid PublicKeys before passing to SDK.
+    // ===================================================================
+    
+    // Final validation: Ensure ATAs are valid PublicKeys
+    if (!nukeAta || !(nukeAta instanceof PublicKey)) {
+      throw new Error(`NUKE ATA is not a valid PublicKey: ${nukeAta}`);
+    }
+    if (!wsolAta || !(wsolAta instanceof PublicKey)) {
+      throw new Error(`WSOL ATA is not a valid PublicKey: ${wsolAta}`);
+    }
+    if (!rewardWalletAddress || !(rewardWalletAddress instanceof PublicKey)) {
+      throw new Error(`Reward wallet address is not a valid PublicKey: ${rewardWalletAddress}`);
+    }
+
     // Convert swap amounts to Decimal (SDK math expects Decimal/Number, not BN/bigint/string)
     const amountInDecimal = new Decimal(amountNuke.toString());
     const minAmountOutDecimal = new Decimal(minDestAmount.toString());
@@ -1476,19 +1542,37 @@ export async function swapNukeToSOL(
       throw new Error('Raydium swap amounts must be Decimal instances');
     }
 
+    // Log final configuration before SDK call
+    logger.info('Calling Raydium SDK with verified ATAs', {
+      nukeAta: nukeAta.toBase58(),
+      wsolAta: wsolAta.toBase58(),
+      owner: rewardWalletAddress.toBase58(),
+      amountIn: amountInDecimal.toString(),
+      amountOut: minAmountOutDecimal.toString(),
+      poolType: poolInfo.poolType,
+      note: 'Both ATAs verified on-chain - SDK can safely query token accounts',
+    });
+
+    // Use SDK's makeSwapInstructionSimple - Standard, CPMM, CLMM
+    // SDK automatically handles vault accounts, program IDs, and instruction building.
+    // We MUST pass explicit ATAs for tokenAccountIn/tokenAccountOut; SDK will not infer them.
+    // NOTE: We intentionally cast the config to `any` to avoid tight coupling to SDK typings,
+    // while still following the documented pattern from Chainstack.
     const swapConfigForSDK: any = {
       connection,
       poolKeys: poolKeys as any,
       userKeys: {
-        tokenAccountIn: nukeAta,   // ✅ NUKE ATA (source SPL token)
-        tokenAccountOut: wsolAta,  // ✅ WSOL ATA (destination wrapped SOL)
-        owner: rewardWalletAddress,
+        tokenAccountIn: nukeAta,   // ✅ NUKE ATA (source SPL token) - verified to exist on-chain
+        tokenAccountOut: wsolAta,  // ✅ WSOL ATA (destination wrapped SOL) - verified to exist on-chain
+        owner: rewardWalletAddress, // ✅ Reward wallet - verified to be valid PublicKey
       },
       amountIn: amountInDecimal,
       amountOut: minAmountOutDecimal,
       fixedSide: 'in',
     };
 
+    // Call SDK - both ATAs are verified to exist on-chain, so SDK's internal
+    // _selectTokenAccount query will succeed and not crash with .filter() on undefined
     const swapResult = await (Liquidity as any).makeSwapInstructionSimple(swapConfigForSDK);
 
     // CRITICAL: Raydium SDK returns innerTransactions (array) or innerTransaction (single)
