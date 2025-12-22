@@ -1476,149 +1476,6 @@ export async function swapNukeToSOL(
       sourceTokenProgram: sourceTokenProgram.toBase58(),
     });
 
-    // Use Raydium SDK for ALL pool types (Standard, CPMM, CLMM)
-    // SDK automatically handles different pool types, vault accounts, and program IDs
-    logger.info('Using Raydium SDK for swap (handles all pool types)', {
-      network: NETWORK,
-      poolId: poolId.toBase58(),
-      poolType: poolInfo.poolType,
-      poolProgramId: poolInfo.poolProgramId.toBase58(),
-    });
-
-    // Fetch pool info in SDK-compatible format
-    const sdkPoolInfo = await fetchPoolInfoForSDK(poolId);
-
-    // Use dynamic import for SDK to handle type issues
-    logger.info('Creating swap transaction using Raydium SDK', {
-      amountIn: amountNuke.toString(),
-      slippageBps,
-      minAmountOut: minDestAmount.toString(),
-      poolType: sdkPoolInfo.type || poolInfo.poolType,
-    });
-
-    // Dynamically import SDK modules
-    const { Liquidity, jsonInfo2PoolKeys } = await import('@raydium-io/raydium-sdk');
-    
-    // Map pool info properly - ONLY include required address fields (base58 addresses)
-    // CRITICAL: SDK will try to parse ALL fields as PublicKeys, causing "invalid public key" errors
-    // DO NOT include numeric metadata like openTime, feeRate, swap amounts, etc.
-    // Only include: id, programId, authority, mintA, mintB, vaultA, vaultB, lpMint (all must be base58 addresses)
-    // Following Chainstack article pattern: https://docs.chainstack.com/docs/solana-how-to-perform-token-swaps-using-the-raydium-sdk
-    const sdkPoolKeysData: any = {
-      id: sdkPoolInfo.id,
-      programId: sdkPoolInfo.programId,
-    };
-
-    // CRITICAL: Add version field - SDK requires this for makeSwapInstruction
-    // Version mapping: 4 = Standard AMM v4, 6 = CPMM, 7 = CLMM
-    // Use version from API if available, otherwise infer from pool type
-    if (sdkPoolInfo.version !== undefined) {
-      sdkPoolKeysData.version = sdkPoolInfo.version;
-    } else {
-      // Infer version from pool type
-      const poolTypeLower = (sdkPoolInfo.type || poolInfo.poolType || '').toLowerCase();
-      if (poolTypeLower === 'cpmm') {
-        sdkPoolKeysData.version = 6;
-      } else if (poolTypeLower === 'clmm') {
-        sdkPoolKeysData.version = 7;
-      } else {
-        // Default to Standard AMM v4 (version 4)
-        sdkPoolKeysData.version = 4;
-      }
-      logger.info('Inferred pool version from pool type', {
-        poolType: poolTypeLower,
-        version: sdkPoolKeysData.version,
-      });
-    }
-
-    // Only include addresses - extract from nested objects if needed
-    if (sdkPoolInfo.mintA?.address) {
-      sdkPoolKeysData.mintA = sdkPoolInfo.mintA.address; // Just the address string
-    } else if (sdkPoolInfo.baseMint) {
-      sdkPoolKeysData.mintA = sdkPoolInfo.baseMint;
-    }
-
-    if (sdkPoolInfo.mintB?.address) {
-      sdkPoolKeysData.mintB = sdkPoolInfo.mintB.address; // Just the address string
-    } else if (sdkPoolInfo.quoteMint) {
-      sdkPoolKeysData.mintB = sdkPoolInfo.quoteMint;
-    }
-
-    // Vault addresses
-    if (sdkPoolInfo.vault?.A) {
-      sdkPoolKeysData.vaultA = sdkPoolInfo.vault.A;
-    }
-    if (sdkPoolInfo.vault?.B) {
-      sdkPoolKeysData.vaultB = sdkPoolInfo.vault.B;
-    }
-
-    // LP mint - extract address if it's an object
-    if (sdkPoolInfo.lpMint) {
-      if (typeof sdkPoolInfo.lpMint === 'string') {
-        sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint;
-      } else if (sdkPoolInfo.lpMint.address) {
-        sdkPoolKeysData.lpMint = sdkPoolInfo.lpMint.address;
-      }
-    }
-
-    // Authority (must be base58 address string)
-    if (sdkPoolInfo.authority) {
-      sdkPoolKeysData.authority = sdkPoolInfo.authority;
-    }
-
-    // CRITICAL: DO NOT include openTime, feeRate, or any numeric metadata
-    // These are NOT public keys and will cause "invalid public key" errors
-    // openTime is a numeric timestamp, NOT a base58 address
-
-    // Remove any undefined/null values
-    Object.keys(sdkPoolKeysData).forEach(key => {
-      if (sdkPoolKeysData[key] === undefined || sdkPoolKeysData[key] === null) {
-        delete sdkPoolKeysData[key];
-      }
-    });
-
-    // Validate that all included fields are strings (base58 addresses) EXCEPT version
-    // Version is a required numeric field for the SDK
-    // This prevents numeric values from being passed to jsonInfo2PoolKeys() (except version)
-    const numericFields = ['openTime', 'feeRate', 'tradeFeeRate', 'protocolFeeRate', 'mintAmountA', 'mintAmountB', 'tvl', 'volume', 'price'];
-    const allowedNumericFields = ['version']; // Version is required by SDK
-    for (const key of Object.keys(sdkPoolKeysData)) {
-      if (numericFields.includes(key)) {
-        logger.warn(`Removing numeric field ${key} from pool keys data (not a public key)`, {
-          value: sdkPoolKeysData[key],
-        });
-        delete sdkPoolKeysData[key];
-      } else if (typeof sdkPoolKeysData[key] !== 'string' && !allowedNumericFields.includes(key)) {
-        logger.warn(`Removing non-string field ${key} from pool keys data (expected base58 address)`, {
-          type: typeof sdkPoolKeysData[key],
-          value: sdkPoolKeysData[key],
-        });
-        delete sdkPoolKeysData[key];
-      }
-    }
-
-    logger.debug('Mapped pool info for SDK (base58 addresses + version field)', {
-      includedFields: Object.keys(sdkPoolKeysData),
-      version: sdkPoolKeysData.version,
-      note: 'Included version field (required by SDK). Excluded openTime, feeRate, logoURI, symbol, price, tvl, volume, and other non-address fields',
-    });
-    
-    // Convert to SDK pool keys
-    // This includes base58 address strings and the version field (required by SDK)
-    const poolKeys = jsonInfo2PoolKeys(sdkPoolKeysData);
-    
-    // Verify version is set after conversion
-    if (!poolKeys.version) {
-      throw new Error(`Pool keys missing version field after jsonInfo2PoolKeys conversion. Pool type: ${poolInfo.poolType}`);
-    }
-
-    logger.info('Pool keys extracted using SDK', {
-      programId: poolKeys.programId.toBase58(),
-      version: poolKeys.version,
-      poolType: poolInfo.poolType,
-      note: 'Version field is required by SDK for makeSwapInstruction',
-    });
-
     // ===================================================================
     // CRITICAL: Final validation before SDK call
     // ===================================================================
@@ -1682,208 +1539,89 @@ export async function swapNukeToSOL(
     });
 
     // ===================================================================
-    // CRITICAL: Bypass SDK's _selectTokenAccount by providing explicit account info
+    // CRITICAL: Use manual Standard AMM v4 instruction builder (NO SDK)
     // ===================================================================
-    // The SDK's _selectTokenAccount queries token accounts and may only query
-    // TOKEN_PROGRAM_ID, missing Token-2022 accounts. To bypass this, we:
-    // 1. Pre-fetch token account data for both program IDs
-    // 2. Pass explicit ATAs with all necessary information
-    // 3. Ensure the SDK has access to account data before it queries
-    // ===================================================================
-    
-    // Pre-fetch token account data to populate connection cache
-    // This helps the SDK's internal query find the accounts
-    try {
-      // Fetch both accounts explicitly to populate cache
-      await Promise.all([
-        getAccount(connection, nukeAta, 'confirmed', TOKEN_2022_PROGRAM_ID),
-        getAccount(connection, wsolAta, 'confirmed', TOKEN_PROGRAM_ID),
-      ]);
-      
-      // Also fetch parsed accounts to help SDK's getParsedTokenAccountsByOwner
-      await Promise.all([
-        connection.getParsedTokenAccountsByOwner(
-          rewardWalletAddress,
-          { programId: TOKEN_2022_PROGRAM_ID },
-          'confirmed'
-        ),
-        connection.getParsedTokenAccountsByOwner(
-          rewardWalletAddress,
-          { programId: TOKEN_PROGRAM_ID },
-          'confirmed'
-        ),
-      ]);
-      
-      logger.debug('Token account data pre-fetched and cached for SDK', {
-        nukeAta: nukeAta.toBase58(),
-        wsolAta: wsolAta.toBase58(),
-        note: 'SDK should now be able to find both accounts in its internal query',
-      });
-    } catch (cacheError) {
-      logger.warn('Failed to pre-fetch token account data (may still work)', {
-        error: cacheError instanceof Error ? cacheError.message : String(cacheError),
-      });
-    }
-
-    // Use SDK's makeSwapInstructionSimple - Standard, CPMM, CLMM
-    // SDK automatically handles vault accounts, program IDs, and instruction building.
-    // We MUST pass explicit ATAs for tokenAccountIn/tokenAccountOut; SDK will not infer them.
-    // 
-    // CRITICAL: We pass explicit ATAs and pre-fetch account data to help the SDK
-    // find both Token-2022 and standard token accounts. The SDK's _selectTokenAccount
-    // should now be able to find both accounts in its internal query.
+    // The Raydium SDK's makeSwapInstructionSimple calls _selectTokenAccount which
+    // queries token accounts and fails with Token-2022. We bypass the SDK entirely
+    // and build the swap instruction manually using the Standard AMM v4 format.
     //
-    // NOTE: We intentionally cast the config to `any` to avoid tight coupling to SDK typings,
-    // while still following the documented pattern from Chainstack.
-    const swapConfigForSDK: any = {
-      connection,
-      poolKeys: poolKeys as any,
-      userKeys: {
-        // ✅ Explicit NUKE ATA (Token-2022) - verified to exist on-chain
-        // Pre-fetched account data should help SDK find this in TOKEN_2022_PROGRAM_ID query
-        tokenAccountIn: nukeAta,
-        // ✅ Explicit WSOL ATA (standard token) - verified to exist on-chain
-        // Pre-fetched account data should help SDK find this in TOKEN_PROGRAM_ID query
-        tokenAccountOut: wsolAta,
-        // ✅ Reward wallet - verified to be valid PublicKey
-        owner: rewardWalletAddress,
-      },
-      amountIn: amountInDecimal,
-      amountOut: minAmountOutDecimal,
-      fixedSide: 'in',
-    };
-
-    // Call SDK - both ATAs are verified to exist on-chain, account data is pre-fetched,
-    // and we've validated that the SDK can query both TOKEN_PROGRAM_ID and TOKEN_2022_PROGRAM_ID accounts.
-    // The SDK's _selectTokenAccount should now find both accounts and not crash with .filter() on undefined.
-    let swapResult: any;
-    try {
-      swapResult = await (Liquidity as any).makeSwapInstructionSimple(swapConfigForSDK);
-      
-      logger.info('Raydium SDK swap instruction created successfully', {
-        nukeAta: nukeAta.toBase58(),
-        wsolAta: wsolAta.toBase58(),
-        note: 'SDK successfully found both Token-2022 and standard token accounts',
-      });
-    } catch (sdkError: any) {
-      // If SDK fails with .filter() error, provide detailed diagnostics and fallback
-      if (sdkError?.message?.includes('filter') || sdkError?.message?.includes('undefined')) {
-        logger.error('Raydium SDK failed to query token accounts (Token-2022 issue)', {
-          error: sdkError.message,
-          stack: sdkError.stack,
-          nukeAta: nukeAta.toBase58(),
-          wsolAta: wsolAta.toBase58(),
-          owner: rewardWalletAddress.toBase58(),
-          nukeProgramId: TOKEN_2022_PROGRAM_ID.toBase58(),
-          wsolProgramId: TOKEN_PROGRAM_ID.toBase58(),
-          note: 'SDK cannot find Token-2022 accounts. Both ATAs exist on-chain, but SDK query failed.',
-        });
-        
-        // Provide actionable error message
-        throw new Error(
-          `Raydium SDK cannot query Token-2022 accounts: ${sdkError.message}. ` +
-          `NUKE ATA (Token-2022) exists at ${nukeAta.toBase58()} with program ${TOKEN_2022_PROGRAM_ID.toBase58()}. ` +
-          `WSOL ATA exists at ${wsolAta.toBase58()} with program ${TOKEN_PROGRAM_ID.toBase58()}. ` +
-          `The SDK's _selectTokenAccount may not be querying TOKEN_2022_PROGRAM_ID accounts. ` +
-          `Check RPC connection, SDK version, and ensure both program IDs are queryable.`
-        );
-      }
-      // Re-throw other errors
-      throw sdkError;
-    }
-
-    // CRITICAL: Raydium SDK returns innerTransactions (array) or innerTransaction (single)
-    // Handle both cases to ensure we extract all instructions correctly
-    let instructionsToAdd: TransactionInstruction[] = [];
+    // This approach:
+    // 1. Fetches pool state from chain (no SDK dependency)
+    // 2. Builds swap instruction manually with explicit accounts
+    // 3. Supports Token-2022 without SDK query issues
+    // 4. Works for Standard AMM v4 pools only
+    // ===================================================================
     
-    // Check for innerTransactions (plural - array of transactions)
-    if ((swapResult as any).innerTransactions && Array.isArray((swapResult as any).innerTransactions)) {
-      const innerTxs = (swapResult as any).innerTransactions;
-      logger.info('SDK returned innerTransactions array', { count: innerTxs.length });
-      
-      for (const innerTx of innerTxs) {
-        if (innerTx && innerTx.instructions && Array.isArray(innerTx.instructions)) {
-          for (const instruction of innerTx.instructions) {
-            if (instruction) {
-              instructionsToAdd.push(instruction);
-            }
-          }
-        }
-      }
-    }
-    // Check for innerTransaction (singular - single transaction)
-    else if ((swapResult as any).innerTransaction) {
-      const innerTx = (swapResult as any).innerTransaction;
-      logger.info('SDK returned innerTransaction (singular)');
-      
-      if (innerTx.instructions && Array.isArray(innerTx.instructions)) {
-        for (const instruction of innerTx.instructions) {
-          if (instruction) {
-            instructionsToAdd.push(instruction);
-          }
-        }
-      }
-    }
-    // Check for instructions directly on the result
-    else if ((swapResult as any).instructions && Array.isArray((swapResult as any).instructions)) {
-      logger.info('SDK returned instructions directly');
-      instructionsToAdd = (swapResult as any).instructions.filter((ix: any) => ix !== null && ix !== undefined);
-    }
-    // Fallback: check if swapResult itself is an instruction
-    else if (swapResult && typeof (swapResult as any).programId !== 'undefined' && (swapResult as any).keys) {
-      logger.info('SDK returned single instruction');
-      instructionsToAdd = [swapResult as unknown as TransactionInstruction];
+    // Only support Standard pools (manual instruction builder)
+    if (poolInfo.poolType !== 'Standard') {
+      throw new Error(
+        `Manual swap instruction builder only supports Standard AMM v4 pools. ` +
+        `Pool type is: ${poolInfo.poolType}. ` +
+        `Please use a Standard pool or implement support for ${poolInfo.poolType} pools.`
+      );
     }
 
-    if (instructionsToAdd.length === 0) {
-      logger.error('SDK failed to generate swap instructions', {
-        swapResultKeys: Object.keys(swapResult || {}),
-        swapResultType: typeof swapResult,
-      });
-      throw new Error('SDK failed to generate swap instruction - no instructions found in result');
+    logger.info('Building Standard AMM v4 swap instruction manually (no SDK)', {
+      poolId: poolId.toBase58(),
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
+      nukeAta: nukeAta.toBase58(),
+      wsolAta: wsolAta.toBase58(),
+      amountIn: amountNuke.toString(),
+      minAmountOut: minDestAmount.toString(),
+      note: 'Bypassing SDK to avoid Token-2022 query issues',
+    });
+
+    // Fetch Standard AMM v4 pool state from chain
+    const poolState = await fetchStandardPoolState(poolId, poolInfo.poolProgramId);
+
+    // Create swap instruction manually
+    const swapInstruction = await createRaydiumStandardSwapInstruction(
+      poolId,
+      poolInfo.poolProgramId,
+      poolState,
+      nukeAta,        // userSourceTokenAccount (NUKE ATA - Token-2022)
+      wsolAta,        // userDestinationTokenAccount (WSOL ATA - standard token)
+      amountNuke,     // amountIn (before transfer fee)
+      minDestAmount,  // minimumAmountOut (with slippage)
+      rewardWalletAddress, // userWallet
+      TOKEN_2022_PROGRAM_ID // sourceTokenProgram (NUKE is Token-2022)
+    );
+
+    // Validate swap instruction before adding
+    if (!swapInstruction.programId) {
+      throw new Error('Swap instruction missing programId');
+    }
+    if (!swapInstruction.keys || !Array.isArray(swapInstruction.keys)) {
+      throw new Error('Swap instruction missing or invalid keys array');
+    }
+    if (swapInstruction.keys.length !== 25) {
+      throw new Error(`Swap instruction has ${swapInstruction.keys.length} accounts, expected 25 for Standard AMM v4`);
     }
 
-    // Validate all instructions before adding
-    for (let i = 0; i < instructionsToAdd.length; i++) {
-      const instruction = instructionsToAdd[i];
-      
-      // Validate instruction structure
-      if (!instruction.programId) {
-        throw new Error(`Instruction ${i} missing programId`);
+    // Validate all account keys are defined
+    for (let j = 0; j < swapInstruction.keys.length; j++) {
+      const accountMeta = swapInstruction.keys[j];
+      if (!accountMeta || !accountMeta.pubkey) {
+        throw new Error(`Swap instruction account ${j} has undefined pubkey`);
       }
-      
-      // Validate all account keys are defined
-      if (!instruction.keys || !Array.isArray(instruction.keys)) {
-        throw new Error(`Instruction ${i} missing or invalid keys array`);
-      }
-      
-      for (let j = 0; j < instruction.keys.length; j++) {
-        const accountMeta = instruction.keys[j];
-        if (!accountMeta || !accountMeta.pubkey) {
-          throw new Error(`Instruction ${i}, account ${j} has undefined pubkey`);
-        }
-        
-        // Verify pubkey is a valid PublicKey (has toString method)
-        try {
-          const pubkeyStr = accountMeta.pubkey.toString();
-          if (!pubkeyStr || pubkeyStr.length === 0) {
-            throw new Error(`Instruction ${i}, account ${j} has invalid pubkey (empty string)`);
-          }
-        } catch (error) {
-          throw new Error(`Instruction ${i}, account ${j} has invalid pubkey: ${error instanceof Error ? error.message : String(error)}`);
-        }
+      try {
+        accountMeta.pubkey.toString(); // Verify it's a valid PublicKey
+      } catch (error) {
+        throw new Error(`Swap instruction account ${j} has invalid pubkey: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    // Add all validated instructions to transaction
-    for (const instruction of instructionsToAdd) {
-      transaction.add(instruction);
-    }
+    // Add swap instruction to transaction
+    transaction.add(swapInstruction);
 
-    logger.info('Swap instructions created using SDK', {
-      instructionCount: instructionsToAdd.length,
-      poolType: poolInfo.poolType,
-      note: 'SDK handles all pool types (Standard/CPMM/CLMM), account fetching, vault addresses, and instruction building automatically',
+    logger.info('Standard AMM v4 swap instruction created manually', {
+      poolProgramId: poolInfo.poolProgramId.toBase58(),
+      poolId: poolId.toBase58(),
+      accountCount: swapInstruction.keys.length,
+      amountIn: amountNuke.toString(),
+      minAmountOut: minDestAmount.toString(),
+      sourceTokenProgram: TOKEN_2022_PROGRAM_ID.toBase58(),
+      note: 'Manual instruction builder - no SDK dependency, full Token-2022 support',
     });
 
     // ===================================================================
