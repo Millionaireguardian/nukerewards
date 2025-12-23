@@ -281,6 +281,11 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     throw new Error(`Unsupported Raydium pool type: "${normalizedType}". Supported types: Standard (AMM v4), CPMM, CLMM.`);
   }
 
+  // Ensure normalizedType is defined - we cannot proceed without knowing the pool type
+  if (!normalizedType) {
+    throw new Error('Pool type could not be determined from API response. Both pooltype and type fields are missing or invalid.');
+  }
+
   // Extract mint addresses (required - no fallbacks)
   if (!poolInfo.mintA || !poolInfo.mintB) {
     throw new Error('Pool API response missing mint addresses');
@@ -331,13 +336,18 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
 
   // Normalize pool type for return
   // Map: 'standard' -> 'Standard', 'cpmm' -> 'Cpmm', 'clmm' -> 'Clmm'
-  const normalizedPoolType = normalizedType === 'standard' 
-    ? 'Standard' 
-    : normalizedType === 'cpmm'
-    ? 'Cpmm'
-    : normalizedType === 'clmm'
-    ? 'Clmm'
-    : normalizedType.charAt(0).toUpperCase() + normalizedType.slice(1);
+  // At this point, normalizedType is guaranteed to be defined and one of the supported types
+  let normalizedPoolType: 'Standard' | 'Cpmm' | 'Clmm';
+  if (normalizedType === 'standard') {
+    normalizedPoolType = 'Standard';
+  } else if (normalizedType === 'cpmm') {
+    normalizedPoolType = 'Cpmm';
+  } else if (normalizedType === 'clmm') {
+    normalizedPoolType = 'Clmm';
+  } else {
+    // This should never happen due to validation above, but TypeScript needs this case
+    throw new Error(`Invalid normalized pool type: ${normalizedType}`);
+  }
 
   // Detect if pool has Serum market
   // CRITICAL: CPMM pools NEVER use Serum - only AMM v4 pools use Serum
