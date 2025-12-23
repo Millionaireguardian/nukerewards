@@ -842,27 +842,28 @@ function createRaydiumCpmmSwapInstruction(
   userWallet: PublicKey,
   sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
 ): TransactionInstruction {
-  // CPMM pools use Anchor instruction format
-  // Calculate discriminator: sha256("global:swap")[0:8]
-  const discriminatorHash = createHash('sha256')
+  // Anchor discriminator for Raydium CPMM swap: sha256("global:swap")[0..7]
+  const swapDiscriminator = createHash('sha256')
     .update('global:swap')
-    .digest();
-  const swapDiscriminator = discriminatorHash.slice(0, 8);
-  
-  // Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
+    .digest()
+    .subarray(0, 8);
+
+  // Instruction data layout (Anchor, little-endian):
+  //   discriminator[8] | amount_in: u64 | minimum_amount_out: u64
   const instructionData = Buffer.alloc(24);
   swapDiscriminator.copy(instructionData, 0);
   instructionData.writeBigUInt64LE(amountIn, 8);
   instructionData.writeBigUInt64LE(minimumAmountOut, 16);
 
-  logger.info('Creating CPMM swap instruction (no Serum market)', {
+  logger.info('Creating CPMM swap instruction (Raydium CPMM Anchor)', {
     poolProgramId: poolProgramId.toBase58(),
     poolId: poolId.toBase58(),
     amountIn: amountIn.toString(),
     minimumAmountOut: minimumAmountOut.toString(),
     tokenProgramId: sourceTokenProgram.toBase58(),
+    discriminator: swapDiscriminator.toString('hex'),
     accountCount: 10,
-    note: 'CPMM pools use simpler account structure without Serum market',
+    note: 'CPMM pools never use Serum; using exact Anchor swap discriminator',
   });
 
   return new TransactionInstruction({
