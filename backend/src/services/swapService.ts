@@ -845,13 +845,15 @@ function createRaydiumCpmmSwapInstruction(
   // Anchor discriminator candidates for Raydium CPMM swap (try in this order)
   const discriminatorLabels = [
     'raydium_cp_swap:swap_base_input', // Option 1 (preferred)
-    'swap_base_input',                 // Option 2
+    'swap_base_input',                 // Option 2 (current attempt)
     'global:swap_base_input',          // Option 3
     'swap',                            // Option 4 (fallback)
   ];
 
+  const discriminatorIndex = 1; // use Option 2 now
+
   const swapDiscriminator = createHash('sha256')
-    .update(discriminatorLabels[0])
+    .update(discriminatorLabels[discriminatorIndex])
     .digest()
     .subarray(0, 8);
 
@@ -869,7 +871,7 @@ function createRaydiumCpmmSwapInstruction(
     minimumAmountOut: minimumAmountOut.toString(),
     tokenProgramId: sourceTokenProgram.toBase58(),
     discriminator: swapDiscriminator.toString('hex'),
-    discriminatorLabel: discriminatorLabels[0],
+    discriminatorLabel: discriminatorLabels[discriminatorIndex],
     accountCount: 10,
     note: 'CPMM pools never use Serum; using exact Anchor swap discriminator',
   });
