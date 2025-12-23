@@ -815,7 +815,7 @@ async function fetchCpmmPoolState(
  * For Token-2022 source tokens (NUKE), we must handle the transfer fee correctly.
  * 
  * CPMM Swap Instruction Format (Anchor):
- * - Instruction discriminator: first 8 bytes of sha256("global:swap")
+ * - Instruction discriminator: Anchor observed: 40c6cde8260871e2
  * - amountIn: u64 (8 bytes) - Amount BEFORE transfer fee deduction
  * - minimumAmountOut: u64 (8 bytes) - Minimum amount to receive (with slippage)
  * 
@@ -842,16 +842,15 @@ function createRaydiumCpmmSwapInstruction(
   userWallet: PublicKey,
   sourceTokenProgram: PublicKey // TOKEN_2022_PROGRAM_ID or TOKEN_PROGRAM_ID
 ): TransactionInstruction {
-  // Raydium CPMM Anchor discriminator (devnet): 40c6cde8260871e2
+  // Raydium CPMM Anchor discriminator (SwapBaseInput observed on devnet): 40c6cde8260871e2
   const swapDiscriminator = Buffer.from('40c6cde8260871e2', 'hex');
 
   // Instruction data layout (Anchor/Borsh, little-endian):
-  // discriminator[8] | amount_in: u64 | minimum_amount_out: u64 | flags: u8 (reserved=0)
-  const instructionData = Buffer.alloc(8 + 8 + 8 + 1);
+  // discriminator[8] | amount_in: u64 | minimum_amount_out: u64
+  const instructionData = Buffer.alloc(8 + 8 + 8);
   swapDiscriminator.copy(instructionData, 0);
   instructionData.writeBigUInt64LE(amountIn, 8);
   instructionData.writeBigUInt64LE(minimumAmountOut, 16);
-  instructionData.writeUInt8(0, 24); // flags/reserved
 
   logger.info('Creating CPMM swap instruction (Raydium CPMM Anchor)', {
     poolProgramId: poolProgramId.toBase58(),
@@ -867,14 +866,14 @@ function createRaydiumCpmmSwapInstruction(
   return new TransactionInstruction({
     programId: poolProgramId,
     keys: [
-      // Order per CPMM IDL expectation — exactly 10 accounts
-      // 0. Pool program ID (readonly) — included because IDL expects 10 keys
+      // Order per CPMM expectation — exactly 10 accounts
+      // 0. Pool program ID (readonly)
       { pubkey: poolProgramId, isSigner: false, isWritable: false },
       // 1. Pool account (writable)
       { pubkey: poolId, isSigner: false, isWritable: true },
-      // 2. Pool coin vault (writable, NUKE)
+      // 2. Pool coin vault (writable, NUKE in pool)
       { pubkey: poolState.poolCoinTokenAccount, isSigner: false, isWritable: true },
-      // 3. Pool pc vault (writable, WSOL)
+      // 3. Pool pc vault (writable, WSOL in pool)
       { pubkey: poolState.poolPcTokenAccount, isSigner: false, isWritable: true },
       // 4. Pool coin mint (readonly)
       { pubkey: poolState.poolCoinMint, isSigner: false, isWritable: false },
