@@ -845,12 +845,12 @@ function createRaydiumCpmmSwapInstruction(
   // Anchor discriminator candidates for Raydium CPMM swap (try in this order)
   const discriminatorLabels = [
     'raydium_cp_swap:swap_base_input', // Option 1 (preferred)
-    'swap_base_input',                 // Option 2 (current attempt)
-    'global:swap_base_input',          // Option 3
+    'swap_base_input',                 // Option 2
+    'global:swap_base_input',          // Option 3 (current attempt)
     'swap',                            // Option 4 (fallback)
   ];
 
-  const discriminatorIndex = 1; // use Option 2 now
+  const discriminatorIndex = 2; // use Option 3 now
 
   const swapDiscriminator = createHash('sha256')
     .update(discriminatorLabels[discriminatorIndex])
