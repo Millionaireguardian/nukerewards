@@ -92,6 +92,7 @@ function getRaydiumCpmmConfig(): {
 // Types for Raydium API response
 interface RaydiumApiPoolInfo {
   programId?: string; // Pool's program ID from API
+  authority?: string; // Pool authority address
   mintA?: { 
     address: string; 
     decimals?: number; 
@@ -811,15 +812,29 @@ async function fetchCpmmPoolState(
     poolPcMint = mintA;
   }
 
-  // Get pool authority (may need to derive from pool account or use a default)
-  // For CPMM, we'll use the pool ID as authority placeholder (may need adjustment)
-  const poolAuthority = poolId; // This may need to be fetched from pool account data
+  // ✅ CRITICAL: Fetch pool authority from API
+  const apiUrl = `https://api-v3-devnet.raydium.io/pools/key/ids?ids=${poolId.toBase58()}`;
+  const response = await fetch(apiUrl);
+  const data = await response.json() as RaydiumApiResponse;
+  
+  if (!data.success || !data.data || data.data.length === 0) {
+    throw new Error('Failed to fetch pool info from API for authority');
+  }
+
+  const poolInfo = data.data[0];
+  
+  // ✅ CRITICAL: Extract authority from API response
+  if (!poolInfo.authority) {
+    throw new Error('Pool authority not found in API response');
+  }
+  const poolAuthority = new PublicKey(poolInfo.authority);
 
   logger.info('CPMM pool state extracted', {
     poolCoinTokenAccount: poolCoinTokenAccount.toBase58(),
     poolPcTokenAccount: poolPcTokenAccount.toBase58(),
     poolCoinMint: poolCoinMint.toBase58(),
     poolPcMint: poolPcMint.toBase58(),
+    poolAuthority: poolAuthority.toBase58(),
     note: 'CPMM pools do not require Serum market accounts',
   });
 
@@ -932,44 +947,46 @@ export function createRaydiumCpmmSwapInstructionV2(params: {
     includeSysvars = false,
   } = params;
 
-  // Discriminator for SwapBaseInput (observed on devnet)
-  const swapDiscriminator = Buffer.from('40c6cde8260871e2', 'hex');
+  // ✅ CRITICAL: Use EXACT discriminator from working transaction
+  // Discriminator: 8fbe5adac41e33de (from devnet transaction 3Tp7sYnKY1vYzdQHKDMyKfpxgWz6K65yVdDa4xkGia3rBe6iyUpWzuTsWNpkyEv6ACf3XNqLwdAz9YbLi8PBH61q)
+  const swapDiscriminator = Buffer.from('8fbe5adac41e33de', 'hex');
 
-  // Data layout: discriminator[8] | amount_in u64 LE | minimum_amount_out u64 LE | trade_fee_flag u8 | creator_fee_flag u8
-  const instructionData = Buffer.alloc(8 + 8 + 8 + 1 + 1);
+  // ✅ CRITICAL: Instruction layout: [8-byte discriminator][8-byte amountIn][8-byte minimumAmountOut] = 24 bytes total
+  // Note: Working transaction shows no flags bytes, just 24 bytes total
+  const instructionData = Buffer.alloc(24);
   swapDiscriminator.copy(instructionData, 0);
   instructionData.writeBigUInt64LE(amountIn, 8);
   instructionData.writeBigUInt64LE(minimumAmountOut, 16);
-  instructionData.writeUInt8(tradeFeeFlag, 24);
-  instructionData.writeUInt8(creatorFeeFlag, 25);
 
+  // ✅ CRITICAL: Account order MUST match working transaction EXACTLY (13 accounts)
+  // Reference: https://explorer.solana.com/tx/3Tp7sYnKY1vYzdQHKDMyKfpxgWz6K65yVdDa4xkGia3rBe6iyUpWzuTsWNpkyEv6ACf3XNqLwdAz9YbLi8PBH61q?cluster=devnet
   const keys = [
-    // 0. Payer (signer, writable)
+    // Account 0: User/Signer (payer)
     { pubkey: payer, isSigner: true, isWritable: true },
-    // 1. Authority (signer, writable)
-    { pubkey: authority, isSigner: true, isWritable: true },
-    // 2. Amm Config (readonly)
-    { pubkey: ammConfig, isSigner: false, isWritable: false },
-    // 3. Pool State (writable)
+    // Account 1: Authority (pool authority from API, NOT a signer, writable)
+    { pubkey: authority, isSigner: false, isWritable: true },
+    // Account 2: AMM Config (writable)
+    { pubkey: ammConfig, isSigner: false, isWritable: true },
+    // Account 3: Pool State (writable)
     { pubkey: poolState, isSigner: false, isWritable: true },
-    // 4. Input Token Account (writable)
+    // Account 4: Input Token Account (writable)
     { pubkey: inputTokenAccount, isSigner: false, isWritable: true },
-    // 5. Output Token Account (writable)
+    // Account 5: Output Token Account (writable)
     { pubkey: outputTokenAccount, isSigner: false, isWritable: true },
-    // 6. Input Vault (writable)
+    // Account 6: Input Vault (writable)
     { pubkey: inputVault, isSigner: false, isWritable: true },
-    // 7. Output Vault (writable)
+    // Account 7: Output Vault (writable)
     { pubkey: outputVault, isSigner: false, isWritable: true },
-    // 8. Input Token Program (readonly)
+    // Account 8: Input Token Program (readonly) - sourceTokenProgram (TOKEN_PROGRAM_ID for WSOL)
     { pubkey: inputTokenProgram, isSigner: false, isWritable: false },
-    // 9. Output Token Program (readonly)
+    // Account 9: Output Token Program (readonly) - destTokenProgram (TOKEN_2022_PROGRAM_ID for NUKE)
     { pubkey: outputTokenProgram, isSigner: false, isWritable: false },
-    // 10. Input Token Mint (readonly)
-    { pubkey: inputMint, isSigner: false, isWritable: false },
-    // 11. Output Token Mint (readonly)
-    { pubkey: outputMint, isSigner: false, isWritable: false },
-    // 12. Observation State (readonly)
-    { pubkey: observationState, isSigner: false, isWritable: false },
+    // Account 10: Input Token Mint (WRITABLE)
+    { pubkey: inputMint, isSigner: false, isWritable: true },
+    // Account 11: Output Token Mint (WRITABLE)
+    { pubkey: outputMint, isSigner: false, isWritable: true },
+    // Account 12: Observation State (writable)
+    { pubkey: observationState, isSigner: false, isWritable: true },
   ];
 
   if (includeSysvars) {
@@ -1916,19 +1933,28 @@ export async function swapNukeToSOL(
       // Load CPMM config (ammConfig + observationState) from env / config, matching reference tx
       const { ammConfig, observationState } = getRaydiumCpmmConfig();
 
+      // ✅ CRITICAL: Determine token program order based on swap direction
+      // For NUKE → WSOL swap:
+      // - Input (NUKE) uses TOKEN_2022_PROGRAM_ID
+      // - Output (WSOL) uses TOKEN_PROGRAM_ID
+      // But the working transaction shows: sourceTokenProgram (TOKEN_PROGRAM_ID) first, then destTokenProgram (TOKEN_2022_PROGRAM_ID)
+      // This is because the transaction was WSOL → NUKE, so we need to reverse for NUKE → WSOL
+      const inputTokenProgram = sourceTokenProgram; // TOKEN_2022_PROGRAM_ID for NUKE
+      const outputTokenProgram = TOKEN_PROGRAM_ID;  // TOKEN_PROGRAM_ID for WSOL
+
       // Create CPMM swap instruction using V2 builder (explicit account order)
       swapInstruction = createRaydiumCpmmSwapInstructionV2({
         poolProgramId: poolInfo.poolProgramId,
-        payer: rewardWalletAddress,           // payer = reward wallet
-        authority: rewardWalletAddress,       // authority = reward wallet (same keypair)
+        payer: rewardWalletAddress,           // payer = reward wallet (signer)
+        authority: cpmmPoolState.poolAuthority, // ✅ CRITICAL: authority = pool authority from API (NOT reward wallet)
         ammConfig,
         poolState: poolId,
         inputTokenAccount: nukeAta,
         outputTokenAccount: wsolAta,
         inputVault: cpmmPoolState.poolCoinTokenAccount,
         outputVault: cpmmPoolState.poolPcTokenAccount,
-        inputTokenProgram: sourceTokenProgram, // Token-2022 for NUKE
-        outputTokenProgram: TOKEN_PROGRAM_ID,  // WSOL uses standard token program
+        inputTokenProgram: inputTokenProgram,  // TOKEN_2022_PROGRAM_ID for NUKE
+        outputTokenProgram: outputTokenProgram, // TOKEN_PROGRAM_ID for WSOL
         inputMint: cpmmPoolState.poolCoinMint,
         outputMint: cpmmPoolState.poolPcMint,
         observationState,
@@ -1948,12 +1974,17 @@ export async function swapNukeToSOL(
       }
       logger.info('CPMM swap instruction created successfully (V2)', {
         accountCount: swapInstruction.keys.length,
+        discriminator: '8fbe5adac41e33de',
+        poolAuthority: cpmmPoolState.poolAuthority.toBase58(),
+        ammConfig: ammConfig.toBase58(),
+        observationState: observationState.toBase58(),
         keys: swapInstruction.keys.map((k, i) => ({
           index: i,
           pubkey: k.pubkey.toBase58(),
           isSigner: k.isSigner,
           isWritable: k.isWritable,
         })),
+        note: 'Using exact structure from working devnet transaction 3Tp7sYnKY1vYzdQHKDMyKfpxgWz6K65yVdDa4xkGia3rBe6iyUpWzuTsWNpkyEv6ACf3XNqLwdAz9YbLi8PBH61q',
       });
     } else if (poolInfo.poolType === 'Standard') {
       // ===================================================================
