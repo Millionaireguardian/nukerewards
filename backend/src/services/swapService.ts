@@ -99,6 +99,7 @@ interface RaydiumApiPoolInfo {
   protocolFeeRate?: number; // Protocol fee rate
   lpMint?: string; // LP token mint address
   serumMarket?: string; // Serum market address (optional - may be missing for some AMM v4 pools)
+  marketId?: string; // Market ID (alternative to serumMarket for AMM v4 pools)
 }
 
 interface RaydiumApiResponse {
@@ -213,13 +214,15 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
     throw new Error(`Raydium API returned ${response.status}`);
   }
 
-  const apiData: RaydiumApiResponse = await response.json() as RaydiumApiResponse;
-  
-  if (!apiData.success || !apiData.data || apiData.data.length === 0) {
-    throw new Error('Pool not found in Raydium API');
+  // Parse API response - structure: { success: true, data: [ { pool fields... } ] }
+  const apiResponse = await response.json() as RaydiumApiResponse;
+
+  // ALWAYS extract the first pool object from response.data array
+  if (!apiResponse?.data || !Array.isArray(apiResponse.data) || apiResponse.data.length === 0) {
+    throw new Error('Raydium API returned no pool data');
   }
 
-  const poolInfo = apiData.data[0];
+  const poolInfo = apiResponse.data[0];
 
   // Extract program ID from API response (required)
   if (!poolInfo.programId) {
@@ -227,30 +230,26 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   }
   const poolProgramId = new PublicKey(poolInfo.programId);
 
-  // Handle pool type detection - CRITICAL: pooltype array takes precedence over type field
-  // API may return both: "type": "Standard" AND "pooltype": ["Cpmm"]
-  // pooltype array is the authoritative source - it correctly identifies CPMM pools
-  let normalizedType: 'cpmm' | 'clmm' | 'standard' | undefined;
+  // Pool type detection - pooltype array is authoritative
+  let normalizedType: 'cpmm' | 'clmm' | 'standard';
 
-  // Treat poolInfo.pooltype as AUTHORITATIVE when present
-  if (poolInfo.pooltype && Array.isArray(poolInfo.pooltype) && poolInfo.pooltype.length > 0) {
-    if (poolInfo.pooltype.some(pt => pt.toLowerCase() === 'cpmm')) {
+  if (Array.isArray(poolInfo.pooltype) && poolInfo.pooltype.length > 0) {
+    if (poolInfo.pooltype.some(p => p.toLowerCase() === 'cpmm')) {
       normalizedType = 'cpmm';
-      logger.info('CPMM pool detected from pooltype array (authoritative)', {
+      logger.info('CPMM pool detected from pooltype array', {
         poolId: poolId.toBase58(),
         pooltype: poolInfo.pooltype,
         type: poolInfo.type,
         normalizedType,
-        note: 'CPMM pool detected - Serum not required (CPMM pools never use Serum)',
       });
-    } else if (poolInfo.pooltype.some(pt => pt.toLowerCase() === 'clmm')) {
+    } else if (poolInfo.pooltype.some(p => p.toLowerCase() === 'clmm')) {
       normalizedType = 'clmm';
       logger.info('CLMM pool detected from pooltype array', {
         poolId: poolId.toBase58(),
         pooltype: poolInfo.pooltype,
         normalizedType,
       });
-    } else if (poolInfo.pooltype.some(pt => pt.toLowerCase() === 'standard')) {
+    } else if (poolInfo.pooltype.some(p => p.toLowerCase() === 'standard')) {
       normalizedType = 'standard';
       logger.info('AMM v4 pool detected from pooltype array', {
         poolId: poolId.toBase58(),
@@ -258,32 +257,17 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
         normalizedType,
       });
     } else {
-      normalizedType = poolInfo.pooltype[0].toLowerCase() as any;
-      logger.info('Pool type detected from pooltype array (fallback)', {
-        poolId: poolId.toBase58(),
-        pooltype: poolInfo.pooltype,
-        type: poolInfo.type,
-        normalizedType,
-      });
+      throw new Error(`Unknown pooltype: ${JSON.stringify(poolInfo.pooltype)}`);
     }
   } else if (poolInfo.type) {
-    // Fallback to type field only if pooltype is not available
     normalizedType = poolInfo.type.toLowerCase() as any;
     logger.info('Pool type detected from type field (fallback)', {
       poolId: poolId.toBase58(),
       type: poolInfo.type,
       normalizedType,
     });
-  }
-
-  // Support Standard AMM (v4), CPMM, and CLMM pools
-  if (normalizedType && !['standard', 'cpmm', 'clmm'].includes(normalizedType)) {
-    throw new Error(`Unsupported Raydium pool type: "${normalizedType}". Supported types: Standard (AMM v4), CPMM, CLMM.`);
-  }
-
-  // Ensure normalizedType is defined - we cannot proceed without knowing the pool type
-  if (!normalizedType) {
-    throw new Error('Pool type could not be determined from API response. Both pooltype and type fields are missing or invalid.');
+  } else {
+    throw new Error('Pool type missing from Raydium API pool object');
   }
 
   // Extract mint addresses (required - no fallbacks)
@@ -328,11 +312,19 @@ async function fetchPoolInfoFromAPI(poolId: PublicKey): Promise<{
   const protocolFeeRate = poolInfo.protocolFeeRate;
   const lpMint = poolInfo.lpMint ? new PublicKey(poolInfo.lpMint) : undefined;
 
-  // After normalization, enforce behavior strictly
+  // Enforce behavior AFTER normalization
   if (normalizedType === 'clmm') {
-    // CLMM pools are explicitly not supported
     throw new Error('CLMM pools are not supported');
   }
+
+  if (normalizedType === 'standard') {
+    // AMM v4 pools require Serum market
+    if (!poolInfo.marketId && !poolInfo.serumMarket) {
+      throw new Error('AMM v4 pool requires Serum market');
+    }
+  }
+
+  // CPMM must NEVER require Serum
 
   // Normalize pool type for return
   // Map: 'standard' -> 'Standard', 'cpmm' -> 'Cpmm', 'clmm' -> 'Clmm'
