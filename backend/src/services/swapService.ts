@@ -1517,11 +1517,13 @@ export async function swapNukeToSOL(
     // Small swaps use minimal slippage, large swaps use higher slippage to prevent Error 6005
     const dynamicSlippageBps = computeDynamicSlippageBps(nukeAfterTransferFee, sourceReserve);
     
-    // ✅ CRITICAL: Adjust slippage to account for transfer fee
-    // When NUKE has a 4% transfer fee, we need additional slippage buffer
+    // ✅ CRITICAL: Adjust slippage to account for Token-2022 transfer fee
+    // Transfer fee is deducted BEFORE swap, causing actual output to be lower than calculated
     // Formula: effectiveSlippage = max(dynamicSlippage, transferFee + buffer)
+    // Example: max(dynamic, 4% transfer fee + 1% buffer) = 5% total slippage for NUKE
+    const bufferBpsForLiquidity = 100; // 1% safety buffer
     const effectiveSlippageBpsForLiquidity = sourceTransferFeeBps > 0 
-      ? Math.max(dynamicSlippageBps, sourceTransferFeeBps + 200) // Transfer fee + 2% buffer
+      ? Math.max(dynamicSlippageBps, sourceTransferFeeBps + bufferBpsForLiquidity) // Transfer fee + 1% buffer
       : dynamicSlippageBps;
     
     // Calculate price impact for logging
@@ -1560,16 +1562,18 @@ export async function swapNukeToSOL(
     // Step 7: Calculate expected SOL output (final calculation)
     const expectedDestAmount = (destReserve * nukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + nukeAfterTransferFee) / BigInt(10000);
     
-    // ✅ CRITICAL: Use dynamic slippage (same calculation as liquidity check)
-    // Dynamic slippage adjusts based on price impact to prevent Error 6005
-    // For large swaps, slippage increases proportionally to price impact
+    // ✅ CRITICAL: Adjust slippage to account for Token-2022 transfer fee
+    // Transfer fee is deducted BEFORE swap, causing actual output to be lower than calculated
+    // Formula: effectiveSlippage = max(baseSlippage, transferFee + buffer)
+    // Example: max(2%, 4% transfer fee + 1% buffer) = 5% total slippage for NUKE
+    const baseSlippageBps = slippageBps; // Original 2% (200 bps)
+    const bufferBps = 100; // 1% safety buffer for price movement
     const dynamicSlippageBpsFinal = computeDynamicSlippageBps(nukeAfterTransferFee, sourceReserve);
     
-    // ✅ CRITICAL: Adjust slippage to account for transfer fee
-    // When NUKE has a 4% transfer fee, we need additional slippage buffer
-    // Formula: effectiveSlippage = max(dynamicSlippage, transferFee + buffer)
+    // When transfer fee exists, use: transferFee + buffer (e.g., 4% + 1% = 5%)
+    // Otherwise, use dynamic slippage (which includes base slippage)
     const effectiveSlippageBps = sourceTransferFeeBps > 0 
-      ? Math.max(dynamicSlippageBpsFinal, sourceTransferFeeBps + 200) // Transfer fee + 2% buffer
+      ? Math.max(dynamicSlippageBpsFinal, sourceTransferFeeBps + bufferBps) // Transfer fee + 1% buffer
       : dynamicSlippageBpsFinal;
     
     let minDestAmount = (expectedDestAmount * BigInt(10000 - effectiveSlippageBps)) / BigInt(10000);
@@ -1588,25 +1592,26 @@ export async function swapNukeToSOL(
       );
     }
 
-    logger.info('Swap calculation (final)', {
+    logger.info('Swap calculation with adjusted slippage', {
       amountNuke: amountNuke.toString(),
       amountNukeAfterTransferFee: nukeAfterTransferFee.toString(),
+      transferFeeBps: sourceTransferFeeBps,
+      transferFeeAmount: (amountNuke - nukeAfterTransferFee).toString(),
       sourceReserve: sourceReserve.toString(),
       destReserve: destReserve.toString(),
       priceImpactBps: priceImpactBpsFinal,
       priceImpactPercent: (priceImpactBpsFinal / 100).toFixed(2),
-      baseSlippageBps: 200,
-      dynamicSlippageBps: dynamicSlippageBpsFinal,
-      transferFeeBps: sourceTransferFeeBps,
-      effectiveSlippageBps,
-      effectiveSlippagePercent: (effectiveSlippageBps / 100).toFixed(2),
       expectedSolLamports: expectedDestAmount.toString(),
       expectedSolAmount: (Number(expectedDestAmount) / LAMPORTS_PER_SOL).toFixed(6),
       minSolLamports: minDestAmount.toString(),
       minSolAmount: (Number(minDestAmount) / LAMPORTS_PER_SOL).toFixed(6),
+      baseSlippageBps: baseSlippageBps,
+      dynamicSlippageBps: dynamicSlippageBpsFinal,
+      effectiveSlippageBps: effectiveSlippageBps,
+      effectiveSlippagePercent: (effectiveSlippageBps / 100).toFixed(2),
       note: sourceTransferFeeBps > 0 
-        ? `Dynamic slippage: ${dynamicSlippageBpsFinal / 100}% (price impact ${(priceImpactBpsFinal / 100).toFixed(2)}%) + transfer fee adjustment = ${effectiveSlippageBps / 100}% effective slippage`
-        : `Dynamic slippage: ${dynamicSlippageBpsFinal / 100}% based on price impact ${(priceImpactBpsFinal / 100).toFixed(2)}%`,
+        ? `NUKE has ${sourceTransferFeeBps / 100}% transfer fee - using ${effectiveSlippageBps / 100}% effective slippage (${sourceTransferFeeBps / 100}% fee + ${bufferBps / 100}% buffer)`
+        : 'No transfer fee on source token - using dynamic slippage based on price impact',
     });
 
     // Step 7: Derive user token accounts (NUKE ATA and WSOL ATA)
