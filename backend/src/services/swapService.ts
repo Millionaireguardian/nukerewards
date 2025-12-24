@@ -1513,37 +1513,54 @@ export async function swapNukeToSOL(
       ? (amountNuke * BigInt(10000 - sourceTransferFeeBps)) / BigInt(10000)
       : amountNuke;
     
-    // ✅ CRITICAL: Calculate dynamic slippage based on price impact
-    // Small swaps use minimal slippage, large swaps use higher slippage to prevent Error 6005
-    const dynamicSlippageBps = computeDynamicSlippageBps(nukeAfterTransferFee, sourceReserve);
+    // ✅ CRITICAL: Dynamic slippage based on trade size and transfer fees (for liquidity check)
+    // Calculate trade size impact (% of pool reserves)
+    const tradeImpactBpsForLiquidity = Number((nukeAfterTransferFee * 10_000n) / sourceReserve);
+    const tradeImpactPercentForLiquidity = tradeImpactBpsForLiquidity / 100;
     
-    // ✅ CRITICAL: Adjust slippage to account for Token-2022 transfer fee
-    // Transfer fee is deducted BEFORE swap, causing actual output to be lower than calculated
-    // Formula: effectiveSlippage = max(dynamicSlippage, transferFee + buffer)
-    // Example: max(dynamic, 4% transfer fee + 1% buffer) = 5% total slippage for NUKE
+    // Dynamic slippage formula (same as final calculation):
+    // - Base: 2% (200 bps)
+    // - Transfer fee: 4% (400 bps) if Token-2022
+    // - Price impact: scales with trade size (0.1% per 1% of pool)
+    // - Safety buffer: 1% (100 bps)
+    const baseSlippageBpsForLiquidity = slippageBps; // 2% (200 bps)
+    const transferFeeSlippageBpsForLiquidity = sourceTransferFeeBps; // 4% (400 bps) for NUKE
+    const priceImpactSlippageBpsForLiquidity = Math.floor(tradeImpactBpsForLiquidity * 0.1); // 0.1% per 1% of pool
     const bufferBpsForLiquidity = 100; // 1% safety buffer
-    const effectiveSlippageBpsForLiquidity = sourceTransferFeeBps > 0 
-      ? Math.max(dynamicSlippageBps, sourceTransferFeeBps + bufferBpsForLiquidity) // Transfer fee + 1% buffer
-      : dynamicSlippageBps;
+    
+    // Calculate total effective slippage
+    const effectiveSlippageBpsForLiquidity = Math.max(
+      baseSlippageBpsForLiquidity,
+      transferFeeSlippageBpsForLiquidity + priceImpactSlippageBpsForLiquidity + bufferBpsForLiquidity
+    );
+    
+    // Cap maximum slippage at 10% (1000 bps) for safety
+    const cappedSlippageBpsForLiquidity = Math.min(effectiveSlippageBpsForLiquidity, 1000);
     
     // Calculate price impact for logging
-    const priceImpactBps = Number((nukeAfterTransferFee * 10_000n) / sourceReserve);
+    const priceImpactBps = tradeImpactBpsForLiquidity;
     
     // Estimate expected output for liquidity verification
     const estimatedDestAmount = (destReserve * nukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + nukeAfterTransferFee) / BigInt(10000);
-    const estimatedMinDestAmount = (estimatedDestAmount * BigInt(10000 - effectiveSlippageBpsForLiquidity)) / BigInt(10000);
+    const estimatedMinDestAmount = (estimatedDestAmount * BigInt(10000 - cappedSlippageBpsForLiquidity)) / BigInt(10000);
     
     logger.info('Dynamic slippage calculation (liquidity check)', {
       amountIn: nukeAfterTransferFee.toString(),
       sourceReserve: sourceReserve.toString(),
+      tradeImpactPercent: tradeImpactPercentForLiquidity.toFixed(2) + '%',
       priceImpactBps,
       priceImpactPercent: (priceImpactBps / 100).toFixed(2),
-      baseSlippageBps: 200,
-      dynamicSlippageBps,
-      transferFeeBps: sourceTransferFeeBps,
-      effectiveSlippageBps: effectiveSlippageBpsForLiquidity,
-      effectiveSlippagePercent: (effectiveSlippageBpsForLiquidity / 100).toFixed(2),
-      note: 'Dynamic slippage adjusts based on price impact to prevent Error 6005',
+      slippageBreakdown: {
+        base: `${baseSlippageBpsForLiquidity / 100}%`,
+        transferFee: `${transferFeeSlippageBpsForLiquidity / 100}%`,
+        priceImpact: `${priceImpactSlippageBpsForLiquidity / 100}%`,
+        buffer: `${bufferBpsForLiquidity / 100}%`,
+        total: `${effectiveSlippageBpsForLiquidity / 100}%`,
+        capped: `${cappedSlippageBpsForLiquidity / 100}%`,
+      },
+      effectiveSlippageBps: cappedSlippageBpsForLiquidity,
+      effectiveSlippagePercent: (cappedSlippageBpsForLiquidity / 100).toFixed(2),
+      note: 'Dynamic slippage adjusts based on transfer fee + trade impact + buffer to prevent Error 6005',
     });
 
     // Verify liquidity
@@ -1562,24 +1579,34 @@ export async function swapNukeToSOL(
     // Step 7: Calculate expected SOL output (final calculation)
     const expectedDestAmount = (destReserve * nukeAfterTransferFee * BigInt(Math.floor(feeMultiplier * 10000))) / (sourceReserve + nukeAfterTransferFee) / BigInt(10000);
     
-    // ✅ CRITICAL: Adjust slippage to account for Token-2022 transfer fee
-    // Transfer fee is deducted BEFORE swap, causing actual output to be lower than calculated
-    // Formula: effectiveSlippage = max(baseSlippage, transferFee + buffer)
-    // Example: max(2%, 4% transfer fee + 1% buffer) = 5% total slippage for NUKE
-    const baseSlippageBps = slippageBps; // Original 2% (200 bps)
-    const bufferBps = 100; // 1% safety buffer for price movement
-    const dynamicSlippageBpsFinal = computeDynamicSlippageBps(nukeAfterTransferFee, sourceReserve);
+    // ✅ CRITICAL: Dynamic slippage based on trade size and transfer fees
+    // Calculate trade size impact (% of pool reserves)
+    const tradeImpactBps = Number((nukeAfterTransferFee * 10_000n) / sourceReserve);
+    const tradeImpactPercent = tradeImpactBps / 100;
     
-    // When transfer fee exists, use: transferFee + buffer (e.g., 4% + 1% = 5%)
-    // Otherwise, use dynamic slippage (which includes base slippage)
-    const effectiveSlippageBps = sourceTransferFeeBps > 0 
-      ? Math.max(dynamicSlippageBpsFinal, sourceTransferFeeBps + bufferBps) // Transfer fee + 1% buffer
-      : dynamicSlippageBpsFinal;
+    // Dynamic slippage formula:
+    // - Base: 2% (200 bps)
+    // - Transfer fee: 4% (400 bps) if Token-2022
+    // - Price impact: scales with trade size (0.1% per 1% of pool)
+    // - Safety buffer: 1% (100 bps)
+    const baseSlippageBps = slippageBps; // 2% (200 bps)
+    const transferFeeSlippageBps = sourceTransferFeeBps; // 4% (400 bps) for NUKE
+    const priceImpactSlippageBps = Math.floor(tradeImpactBps * 0.1); // 0.1% per 1% of pool
+    const bufferBps = 100; // 1% safety buffer
     
-    let minDestAmount = (expectedDestAmount * BigInt(10000 - effectiveSlippageBps)) / BigInt(10000);
+    // Calculate total effective slippage
+    const effectiveSlippageBps = Math.max(
+      baseSlippageBps,
+      transferFeeSlippageBps + priceImpactSlippageBps + bufferBps
+    );
+    
+    // Cap maximum slippage at 10% (1000 bps) for safety
+    const cappedSlippageBps = Math.min(effectiveSlippageBps, 1000);
+    
+    let minDestAmount = (expectedDestAmount * BigInt(10000 - cappedSlippageBps)) / BigInt(10000);
     
     // Calculate price impact for final logging
-    const priceImpactBpsFinal = Number((nukeAfterTransferFee * 10_000n) / sourceReserve);
+    const priceImpactBpsFinal = tradeImpactBps;
 
     if (minDestAmount < MIN_SOL_OUTPUT) {
       logger.warn('Expected SOL output below minimum threshold', {
@@ -1592,26 +1619,36 @@ export async function swapNukeToSOL(
       );
     }
 
-    logger.info('Swap calculation with adjusted slippage', {
+    logger.info('Swap calculation with dynamic slippage', {
       amountNuke: amountNuke.toString(),
       amountNukeAfterTransferFee: nukeAfterTransferFee.toString(),
       transferFeeBps: sourceTransferFeeBps,
       transferFeeAmount: (amountNuke - nukeAfterTransferFee).toString(),
       sourceReserve: sourceReserve.toString(),
       destReserve: destReserve.toString(),
+      tradeImpactPercent: tradeImpactPercent.toFixed(2) + '%',
       priceImpactBps: priceImpactBpsFinal,
       priceImpactPercent: (priceImpactBpsFinal / 100).toFixed(2),
       expectedSolLamports: expectedDestAmount.toString(),
       expectedSolAmount: (Number(expectedDestAmount) / LAMPORTS_PER_SOL).toFixed(6),
       minSolLamports: minDestAmount.toString(),
       minSolAmount: (Number(minDestAmount) / LAMPORTS_PER_SOL).toFixed(6),
+      slippageBreakdown: {
+        base: `${baseSlippageBps / 100}%`,
+        transferFee: `${transferFeeSlippageBps / 100}%`,
+        priceImpact: `${priceImpactSlippageBps / 100}%`,
+        buffer: `${bufferBps / 100}%`,
+        total: `${effectiveSlippageBps / 100}%`,
+        capped: `${cappedSlippageBps / 100}%`,
+      },
       baseSlippageBps: baseSlippageBps,
-      dynamicSlippageBps: dynamicSlippageBpsFinal,
+      transferFeeSlippageBps: transferFeeSlippageBps,
+      priceImpactSlippageBps: priceImpactSlippageBps,
+      bufferBps: bufferBps,
       effectiveSlippageBps: effectiveSlippageBps,
-      effectiveSlippagePercent: (effectiveSlippageBps / 100).toFixed(2),
-      note: sourceTransferFeeBps > 0 
-        ? `NUKE has ${sourceTransferFeeBps / 100}% transfer fee - using ${effectiveSlippageBps / 100}% effective slippage (${sourceTransferFeeBps / 100}% fee + ${bufferBps / 100}% buffer)`
-        : 'No transfer fee on source token - using dynamic slippage based on price impact',
+      cappedSlippageBps: cappedSlippageBps,
+      effectiveSlippagePercent: (cappedSlippageBps / 100).toFixed(2),
+      note: 'Using dynamic slippage based on transfer fee + trade impact + buffer',
     });
 
     // Step 7: Derive user token accounts (NUKE ATA and WSOL ATA)
@@ -2335,7 +2372,7 @@ export async function swapNukeToSOL(
     let simulationAttempt = 0;
     const MAX_SIMULATION_RETRIES = 1; // One retry only
     let currentMinDestAmount = minDestAmount;
-    let currentEffectiveSlippageBps = effectiveSlippageBps;
+    let currentEffectiveSlippageBps = cappedSlippageBps;
     
     while (simulationAttempt <= MAX_SIMULATION_RETRIES) {
       // Rebuild transaction if this is a retry
@@ -2348,7 +2385,7 @@ export async function swapNukeToSOL(
         });
         
         // Increase slippage by 100 bps (1%) for retry
-        currentEffectiveSlippageBps = Math.min(currentEffectiveSlippageBps + 100, 500); // Hard cap at 500 bps (5%)
+        currentEffectiveSlippageBps = Math.min(currentEffectiveSlippageBps + 100, 1000); // Hard cap at 1000 bps (10%)
         
         // Recalculate minDestAmount with new slippage
         currentMinDestAmount = (expectedDestAmount * BigInt(10000 - currentEffectiveSlippageBps)) / BigInt(10000);
