@@ -11,6 +11,7 @@ interface EnvConfig {
   SOLANA_RPC_URL: string;
   TOKEN_MINT: string;
   ADMIN_WALLET_JSON: string;
+  REWARD_VALUE_MODE: 'TOKEN' | 'USD';
   // Additional environment variables can be added here as needed
   [key: string]: string | number | undefined;
 }
@@ -40,6 +41,15 @@ export function loadEnv(): EnvConfig {
     throw new Error('ADMIN_WALLET_JSON environment variable is required');
   }
 
+  // REWARD_VALUE_MODE: Controls how reward values are calculated and displayed
+  // - "TOKEN": For devnet - uses raw NUKE token amounts (no USD conversion)
+  // - "USD": For mainnet - uses USD values converted from token amounts
+  // Defaults to "TOKEN" if not specified
+  const rewardValueMode = (process.env.REWARD_VALUE_MODE || 'TOKEN').toUpperCase();
+  if (rewardValueMode !== 'TOKEN' && rewardValueMode !== 'USD') {
+    throw new Error('REWARD_VALUE_MODE must be either "TOKEN" or "USD"');
+  }
+
   return {
     NODE_ENV: nodeEnv,
     PORT: port,
@@ -47,6 +57,7 @@ export function loadEnv(): EnvConfig {
     SOLANA_RPC_URL: rpcUrl,
     TOKEN_MINT: process.env.TOKEN_MINT,
     ADMIN_WALLET_JSON: process.env.ADMIN_WALLET_JSON,
+    REWARD_VALUE_MODE: rewardValueMode as 'TOKEN' | 'USD',
   };
 }
 

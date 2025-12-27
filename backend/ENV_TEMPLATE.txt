@@ -33,6 +33,41 @@ TOTAL_REWARD_POOL_SOL=1.0
 MIN_HOLDING_USD=5
 MIN_SOL_PAYOUT=0.0001
 
+# Reward Value Mode
+# Controls how reward values are calculated and displayed
+# - TOKEN: For devnet - uses raw NUKE token amounts (no USD conversion)
+# - USD: For mainnet - uses USD values converted from token amounts
+# Defaults to "TOKEN" if not specified
+REWARD_VALUE_MODE=TOKEN
+
+# Tax Harvest Threshold Configuration
+# Minimum tax collection threshold before harvesting can proceed
+# Prevents harvesting when tax amount is too small to be cost-effective
+# - MIN_TAX_THRESHOLD_TOKEN: Minimum tax in raw token units (for TOKEN mode)
+#   Default: 20000 (20,000 NUKE tokens)
+# - MIN_TAX_THRESHOLD_USD: Minimum tax in USD (for USD mode)
+#   Default: 5 (5 USD)
+MIN_TAX_THRESHOLD_TOKEN=20000
+MIN_TAX_THRESHOLD_USD=5
+
+# Batch Harvest Configuration
+# Controls batch harvesting for large tax amounts to prevent market impact
+# - MAX_HARVEST_TOKEN: Maximum harvest amount in token units before batching (for TOKEN mode)
+#   Default: 12000000 (12,000,000 NUKE tokens)
+# - MAX_HARVEST_USD: Maximum harvest amount in USD before batching (for USD mode)
+#   Default: 2000 (2,000 USD)
+# - BATCH_COUNT: Number of batches to split large harvests into
+#   Default: 4
+# - BATCH_DELAY_TOKEN_MODE: Delay between batches in TOKEN mode (milliseconds)
+#   Default: 10000 (10 seconds)
+# - BATCH_DELAY_USD_MODE: Delay between batches in USD mode (milliseconds)
+#   Default: 30000 (30 seconds)
+MAX_HARVEST_TOKEN=12000000
+MAX_HARVEST_USD=2000
+BATCH_COUNT=4
+BATCH_DELAY_TOKEN_MODE=10000
+BATCH_DELAY_USD_MODE=30000
+
 # Tax Distribution Configuration
 # Reward wallet receives 3% of transaction tax
 # REWARD_WALLET_ADDRESS is optional (will be derived from private key if not set)

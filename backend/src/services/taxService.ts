@@ -19,6 +19,8 @@ import { connection, tokenMint } from '../config/solana';
 import { logger } from '../utils/logger';
 import { loadKeypairFromEnv, loadKeypairFromEnvOptional } from '../utils/loadKeypairFromEnv';
 import { getAdminWallet } from './rewardService';
+import { isTokenMode, TAX_THRESHOLD_CONFIG, BATCH_HARVEST_CONFIG } from '../config/constants';
+import { getNUKEPriceUSD } from './priceService';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -252,6 +254,300 @@ export interface TaxDistributionResult {
  */
 export class TaxService {
   /**
+   * Check if collected tax meets minimum threshold before harvesting
+   * 
+   * Compares the total available tax (from accounts + mint) against the configured threshold.
+   * Threshold is mode-dependent:
+   * - TOKEN mode: Compares against MIN_TAX_THRESHOLD_TOKEN (in raw token units)
+   * - USD mode: Converts to USD and compares against MIN_TAX_THRESHOLD_USD
+   * 
+   * @param totalTaxAmount - Total tax amount available (in raw token units with decimals)
+   * @param decimals - Token decimals for conversion
+   * @returns true if threshold is met, false otherwise
+   */
+  static async checkMinimumTaxThreshold(
+    totalTaxAmount: bigint,
+    decimals: number
+  ): Promise<boolean> {
+    if (totalTaxAmount === 0n) {
+      logger.info('Tax threshold check: No tax collected', {
+        totalTaxAmount: '0',
+        thresholdMet: false,
+      });
+      return false;
+    }
+
+    const taxAmountHuman = Number(totalTaxAmount) / Math.pow(10, decimals);
+
+    if (isTokenMode()) {
+      // TOKEN mode: Compare against MIN_TAX_THRESHOLD_TOKEN (in token units)
+      const threshold = TAX_THRESHOLD_CONFIG.MIN_TAX_THRESHOLD_TOKEN;
+      const thresholdMet = taxAmountHuman >= threshold;
+      
+      logger.info('Tax threshold check (TOKEN mode)', {
+        status: thresholdMet ? 'PASSED' : 'FAILED',
+        totalTaxAmount: totalTaxAmount.toString(),
+        totalTaxAmountHuman: taxAmountHuman.toFixed(6),
+        threshold: threshold,
+        thresholdMet,
+        mode: 'TOKEN',
+        action: thresholdMet ? 'Harvest will proceed' : 'Harvest will be skipped (tax rolling over)',
+      });
+
+      return thresholdMet;
+    } else {
+      // USD mode: Convert to USD and compare against MIN_TAX_THRESHOLD_USD
+      try {
+        const tokenPriceUSD = await getNUKEPriceUSD();
+        const taxAmountUSD = taxAmountHuman * tokenPriceUSD;
+        const threshold = TAX_THRESHOLD_CONFIG.MIN_TAX_THRESHOLD_USD;
+        const thresholdMet = taxAmountUSD >= threshold;
+
+        logger.info('Tax threshold check (USD mode)', {
+          status: thresholdMet ? 'PASSED' : 'FAILED',
+          totalTaxAmount: totalTaxAmount.toString(),
+          totalTaxAmountHuman: taxAmountHuman.toFixed(6),
+          tokenPriceUSD: tokenPriceUSD.toFixed(6),
+          taxAmountUSD: taxAmountUSD.toFixed(2),
+          threshold: threshold,
+          thresholdMet,
+          mode: 'USD',
+          action: thresholdMet ? 'Harvest will proceed' : 'Harvest will be skipped (tax rolling over)',
+        });
+
+        return thresholdMet;
+      } catch (error) {
+        logger.warn('Failed to get token price for USD threshold check, defaulting to TOKEN mode comparison', {
+          error: error instanceof Error ? error.message : String(error),
+          totalTaxAmount: totalTaxAmount.toString(),
+          totalTaxAmountHuman: taxAmountHuman.toFixed(6),
+        });
+        
+        // Fallback to TOKEN mode comparison if price fetch fails
+        const threshold = TAX_THRESHOLD_CONFIG.MIN_TAX_THRESHOLD_TOKEN;
+        const thresholdMet = taxAmountHuman >= threshold;
+        
+        logger.info('Tax threshold check (fallback to TOKEN mode)', {
+          status: thresholdMet ? 'PASSED' : 'FAILED',
+          totalTaxAmount: totalTaxAmount.toString(),
+          totalTaxAmountHuman: taxAmountHuman.toFixed(6),
+          threshold: threshold,
+          thresholdMet,
+          mode: 'TOKEN (fallback)',
+          action: thresholdMet ? 'Harvest will proceed' : 'Harvest will be skipped (tax rolling over)',
+          note: 'Using fallback because USD price fetch failed',
+        });
+
+        return thresholdMet;
+      }
+    }
+  }
+
+  /**
+   * Check if harvest amount should be split into batches
+   * 
+   * Compares the harvest amount against the configured maximum threshold.
+   * Threshold is mode-dependent:
+   * - TOKEN mode: Compares against MAX_HARVEST_TOKEN (in raw token units)
+   * - USD mode: Converts to USD and compares against MAX_HARVEST_USD
+   * 
+   * @param harvestAmount - Total harvest amount (in raw token units with decimals)
+   * @param decimals - Token decimals for conversion
+   * @returns true if harvest should be split into batches, false otherwise
+   */
+  static async shouldSplitHarvest(
+    harvestAmount: bigint,
+    decimals: number
+  ): Promise<boolean> {
+    if (harvestAmount === 0n) {
+      return false;
+    }
+
+    const harvestAmountHuman = Number(harvestAmount) / Math.pow(10, decimals);
+
+    if (isTokenMode()) {
+      // TOKEN mode: Compare against MAX_HARVEST_TOKEN (in token units)
+      const maxHarvest = BATCH_HARVEST_CONFIG.MAX_HARVEST_TOKEN;
+      const shouldSplit = harvestAmountHuman > maxHarvest;
+      
+      logger.info('Batch harvest check (TOKEN mode)', {
+        harvestAmount: harvestAmount.toString(),
+        harvestAmountHuman: harvestAmountHuman.toFixed(6),
+        maxHarvest: maxHarvest,
+        shouldSplit,
+        mode: 'TOKEN',
+      });
+
+      return shouldSplit;
+    } else {
+      // USD mode: Convert to USD and compare against MAX_HARVEST_USD
+      try {
+        const tokenPriceUSD = await getNUKEPriceUSD();
+        const harvestAmountUSD = harvestAmountHuman * tokenPriceUSD;
+        const maxHarvest = BATCH_HARVEST_CONFIG.MAX_HARVEST_USD;
+        const shouldSplit = harvestAmountUSD > maxHarvest;
+
+        logger.info('Batch harvest check (USD mode)', {
+          harvestAmount: harvestAmount.toString(),
+          harvestAmountHuman: harvestAmountHuman.toFixed(6),
+          tokenPriceUSD: tokenPriceUSD.toFixed(6),
+          harvestAmountUSD: harvestAmountUSD.toFixed(2),
+          maxHarvest: maxHarvest,
+          shouldSplit,
+          mode: 'USD',
+        });
+
+        return shouldSplit;
+      } catch (error) {
+        logger.warn('Failed to get token price for USD batch check, defaulting to TOKEN mode comparison', {
+          error: error instanceof Error ? error.message : String(error),
+          harvestAmount: harvestAmount.toString(),
+          harvestAmountHuman: harvestAmountHuman.toFixed(6),
+        });
+        
+        // Fallback to TOKEN mode comparison if price fetch fails
+        const maxHarvest = BATCH_HARVEST_CONFIG.MAX_HARVEST_TOKEN;
+        const shouldSplit = harvestAmountHuman > maxHarvest;
+        
+        logger.info('Batch harvest check (fallback to TOKEN mode)', {
+          harvestAmount: harvestAmount.toString(),
+          harvestAmountHuman: harvestAmountHuman.toFixed(6),
+          maxHarvest: maxHarvest,
+          shouldSplit,
+          mode: 'TOKEN (fallback)',
+        });
+
+        return shouldSplit;
+      }
+    }
+  }
+
+  /**
+   * Execute batch harvest by splitting large amounts into multiple swaps
+   * 
+   * Splits the total harvest amount into BATCH_COUNT batches and executes
+   * each swap with appropriate delays between them.
+   * 
+   * @param totalAmount - Total amount to harvest (in raw token units with decimals)
+   * @param decimals - Token decimals for conversion
+   * @returns Combined swap results with total SOL received and all transaction signatures
+   */
+  static async executeBatchHarvest(
+    totalAmount: bigint,
+    decimals: number
+  ): Promise<{
+    solReceived: bigint;
+    txSignatures: string[];
+  }> {
+    const batchCount = BATCH_HARVEST_CONFIG.BATCH_COUNT;
+    const batchSize = totalAmount / BigInt(batchCount);
+    const remainder = totalAmount % BigInt(batchCount);
+    
+    // Determine delay based on mode
+    const delay = isTokenMode() 
+      ? BATCH_HARVEST_CONFIG.BATCH_DELAY_TOKEN_MODE 
+      : BATCH_HARVEST_CONFIG.BATCH_DELAY_USD_MODE;
+
+    const batchStartTime = Date.now();
+    logger.info('Starting batch harvest', {
+      totalAmount: totalAmount.toString(),
+      totalAmountHuman: (Number(totalAmount) / Math.pow(10, decimals)).toFixed(6),
+      batchCount,
+      batchSize: batchSize.toString(),
+      batchSizeHuman: (Number(batchSize) / Math.pow(10, decimals)).toFixed(6),
+      remainder: remainder.toString(),
+      delayMs: delay,
+      mode: isTokenMode() ? 'TOKEN' : 'USD',
+      startTime: new Date(batchStartTime).toISOString(),
+    });
+
+    const txSignatures: string[] = [];
+    let totalSolReceived = 0n;
+
+    // Execute each batch
+    for (let i = 0; i < batchCount; i++) {
+      // Add remainder to the last batch
+      const currentBatchAmount = i === batchCount - 1 
+        ? batchSize + remainder 
+        : batchSize;
+
+      if (currentBatchAmount === 0n) {
+        logger.info(`Skipping batch ${i + 1}/${batchCount} - zero amount`);
+        continue;
+      }
+
+      const batchExecutionStart = Date.now();
+      logger.info(`Executing batch ${i + 1}/${batchCount}`, {
+        batchNumber: i + 1,
+        batchAmount: currentBatchAmount.toString(),
+        batchAmountHuman: (Number(currentBatchAmount) / Math.pow(10, decimals)).toFixed(6),
+        totalBatches: batchCount,
+        startTime: new Date(batchExecutionStart).toISOString(),
+      });
+
+      try {
+        const { swapNukeToSOL } = await import('./swapService');
+        const swapResult = await swapNukeToSOL(currentBatchAmount);
+        
+        totalSolReceived += swapResult.solReceived;
+        txSignatures.push(swapResult.txSignature);
+
+        const batchExecutionTime = Date.now() - batchExecutionStart;
+        logger.info(`Batch ${i + 1}/${batchCount} completed`, {
+          batchNumber: i + 1,
+          batchAmount: currentBatchAmount.toString(),
+          batchAmountHuman: (Number(currentBatchAmount) / Math.pow(10, decimals)).toFixed(6),
+          solReceived: swapResult.solReceived.toString(),
+          solReceivedHuman: (Number(swapResult.solReceived) / 1e9).toFixed(6),
+          txSignature: swapResult.txSignature,
+          cumulativeSol: totalSolReceived.toString(),
+          cumulativeSolHuman: (Number(totalSolReceived) / 1e9).toFixed(6),
+          executionTimeMs: batchExecutionTime,
+        });
+
+        // Wait before next batch (except for the last batch)
+        if (i < batchCount - 1) {
+          logger.info(`Waiting ${delay}ms before next batch`, {
+            batchNumber: i + 1,
+            nextBatch: i + 2,
+            delayMs: delay,
+          });
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      } catch (error) {
+        logger.error(`Batch ${i + 1}/${batchCount} failed`, {
+          batchNumber: i + 1,
+          batchAmount: currentBatchAmount.toString(),
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+        // Continue with remaining batches even if one fails
+        // This allows partial success
+      }
+    }
+
+    const batchTotalTime = Date.now() - batchStartTime;
+    logger.info('Batch harvest completed', {
+      totalAmount: totalAmount.toString(),
+      totalAmountHuman: (Number(totalAmount) / Math.pow(10, decimals)).toFixed(6),
+      batchCount,
+      successfulBatches: txSignatures.length,
+      failedBatches: batchCount - txSignatures.length,
+      totalSolReceived: totalSolReceived.toString(),
+      totalSolReceivedHuman: (Number(totalSolReceived) / 1e9).toFixed(6),
+      txSignatures,
+      totalExecutionTimeMs: batchTotalTime,
+      averageBatchTimeMs: Math.round(batchTotalTime / batchCount),
+      endTime: new Date().toISOString(),
+    });
+
+    return {
+      solReceived: totalSolReceived,
+      txSignatures,
+    };
+  }
+
+  /**
    * Process withheld tax from Token-2022 transfers
    * 
    * Withdraws withheld tokens from the mint and distributes them:
@@ -452,26 +748,43 @@ export class TaxService {
         // Continue anyway - harvest might still work
       }
 
-      // Step 4: Harvest from accounts with withheld fees
+      // Step 4: Check minimum tax threshold before harvesting
+      const totalAvailable = totalWithheldInAccounts + mintWithheldAmount;
+      
+      // Check if tax meets minimum threshold
+      const thresholdMet = await TaxService.checkMinimumTaxThreshold(totalAvailable, decimals);
+      
+      if (!thresholdMet) {
+        logger.info('Tax below minimum threshold, rolling over', {
+          totalAvailable: totalAvailable.toString(),
+          totalAvailableHuman: (Number(totalAvailable) / Math.pow(10, decimals)).toFixed(6),
+          note: 'Tax will accumulate until threshold is met. No harvest performed.',
+        });
+        // Return null to skip harvest - tax remains accumulated and will be checked again next cycle
+        return null;
+      }
+
+      // Step 5: Harvest from accounts with withheld fees
       // Use explicit list of accounts (more reliable than empty array)
       const harvestSources = accountsWithWithheldList.length > 0 
         ? accountsWithWithheldList 
         : []; // Fallback to empty array if no accounts found (shouldn't happen if scan worked)
       
       // Log what we're about to do
-      const totalAvailable = totalWithheldInAccounts + mintWithheldAmount;
       if (totalAvailable > 0n) {
         logger.info('Withheld tokens detected - proceeding with harvest', {
           totalWithheldInAccounts: totalWithheldInAccounts.toString(),
           mintWithheldAmount: mintWithheldAmount.toString(),
           totalAvailable: totalAvailable.toString(),
           accountsToHarvest: harvestSources.length,
+          thresholdMet: true,
         });
       } else {
         logger.info('No withheld tokens detected in scan, but attempting harvest anyway', {
           reason: 'Scan might miss accounts or new fees collected since scan',
           totalWithheldInAccounts: totalWithheldInAccounts.toString(),
           mintWithheldAmount: mintWithheldAmount.toString(),
+          thresholdMet: true,
         });
       }
       
@@ -742,29 +1055,69 @@ export class TaxService {
         decimals,
       });
 
-      // Step 7: Swap NUKE to SOL via Raydium
+      // Step 7: Swap NUKE to SOL via Raydium (with batch support for large amounts)
       logger.info('Swapping harvested NUKE to SOL', {
         nukeAmount: withdrawnAmount.toString(),
+        nukeAmountHuman: (Number(withdrawnAmount) / Math.pow(10, decimals)).toFixed(6),
       });
 
+      // Check if harvest should be split into batches
+      const shouldSplit = await TaxService.shouldSplitHarvest(withdrawnAmount, decimals);
+      
       let swapResult: { solReceived: bigint; txSignature: string } | null = null;
-      try {
-        const { swapNukeToSOL } = await import('./swapService');
-        swapResult = await swapNukeToSOL(withdrawnAmount);
-        
-        logger.info('NUKE swapped to SOL successfully', {
-          nukeAmount: withdrawnAmount.toString(),
-          solReceived: swapResult.solReceived.toString(),
-          swapSignature: swapResult.txSignature,
-        });
-      } catch (error) {
-        logger.error('Failed to swap NUKE to SOL - aborting distribution', {
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
+      let swapSignatures: string[] = [];
+
+      if (shouldSplit) {
+        // Execute batch harvest
+        logger.info('Large harvest detected - using batch mode', {
           nukeAmount: withdrawnAmount.toString(),
           nukeAmountHuman: (Number(withdrawnAmount) / Math.pow(10, decimals)).toFixed(6),
         });
-        return null; // Abort if swap fails
+
+        try {
+          const batchResult = await TaxService.executeBatchHarvest(withdrawnAmount, decimals);
+          swapResult = {
+            solReceived: batchResult.solReceived,
+            txSignature: batchResult.txSignatures.join(','), // Comma-separated for logging
+          };
+          swapSignatures = batchResult.txSignatures;
+          
+          logger.info('Batch NUKE swap to SOL completed successfully', {
+            nukeAmount: withdrawnAmount.toString(),
+            solReceived: swapResult.solReceived.toString(),
+            batchCount: swapSignatures.length,
+            swapSignatures,
+          });
+        } catch (error) {
+          logger.error('Failed to execute batch swap NUKE to SOL - aborting distribution', {
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            nukeAmount: withdrawnAmount.toString(),
+            nukeAmountHuman: (Number(withdrawnAmount) / Math.pow(10, decimals)).toFixed(6),
+          });
+          return null; // Abort if batch swap fails
+        }
+      } else {
+        // Execute single swap
+        try {
+          const { swapNukeToSOL } = await import('./swapService');
+          swapResult = await swapNukeToSOL(withdrawnAmount);
+          swapSignatures = [swapResult.txSignature];
+          
+          logger.info('NUKE swapped to SOL successfully (single swap)', {
+            nukeAmount: withdrawnAmount.toString(),
+            solReceived: swapResult.solReceived.toString(),
+            swapSignature: swapResult.txSignature,
+          });
+        } catch (error) {
+          logger.error('Failed to swap NUKE to SOL - aborting distribution', {
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            nukeAmount: withdrawnAmount.toString(),
+            nukeAmountHuman: (Number(withdrawnAmount) / Math.pow(10, decimals)).toFixed(6),
+          });
+          return null; // Abort if swap fails
+        }
       }
 
       if (!swapResult || swapResult.solReceived === 0n) {
@@ -870,7 +1223,7 @@ export class TaxService {
       taxState.totalNukeHarvested = (currentNukeHarvested + totalTax).toString();
       taxState.totalNukeSold = (currentNukeSold + totalTax).toString();
       taxState.lastTaxDistribution = Date.now();
-      taxState.lastSwapTx = swapResult.txSignature;
+      taxState.lastSwapTx = swapSignatures.length > 0 ? swapSignatures.join(',') : swapResult.txSignature;
       taxState.lastDistributionTx = distributionResult?.signatures.map(s => s.signature).join(',') || null;
       taxState.lastDistributionTime = Date.now();
       
@@ -880,7 +1233,7 @@ export class TaxService {
         rewardAmount: holdersSol.toString(), // SOL distributed to holders
         treasuryAmount: treasurySol.toString(), // SOL sent to treasury
         fromAddress: 'mint', // Withdrawn from mint
-        rewardSignature: swapResult.txSignature, // Swap transaction
+        rewardSignature: swapSignatures.length > 0 ? swapSignatures.join(',') : swapResult.txSignature, // Swap transaction(s)
         treasurySignature,
       });
 
@@ -898,7 +1251,8 @@ export class TaxService {
         holdersSol: holdersSol.toString(),
         treasurySol: treasurySol.toString(),
         distributedCount: distributionResult?.distributedCount || 0,
-        swapSignature: swapResult.txSignature,
+        swapSignature: swapSignatures.length > 0 ? swapSignatures.join(',') : swapResult.txSignature,
+        swapSignatureCount: swapSignatures.length,
         treasurySignature,
         totalTaxCollected: taxState.totalTaxCollected,
         totalRewardAmount: taxState.totalRewardAmount,
@@ -910,7 +1264,7 @@ export class TaxService {
         treasuryAmount: treasurySol, // SOL amount
         totalTax,
         treasurySignature,
-        swapSignature: swapResult.txSignature,
+        swapSignature: swapSignatures.length > 0 ? swapSignatures.join(',') : swapResult.txSignature,
         distributionResult: distributionResult || undefined,
       };
     } catch (error) {

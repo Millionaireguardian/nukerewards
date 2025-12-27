@@ -10,6 +10,15 @@ import { generateCombinedExcel } from '../services/rewardExportService';
 import { getNUKEPriceUSD } from '../services/priceService';
 import { isBlacklisted } from '../config/blacklist';
 import { TaxService } from '../services/taxService';
+import { updateEligibleWallets, getEligibleWalletsMetadata } from '../services/eligibleWalletsService';
+import {
+  getAllWalletsWithAccumulatedRewards,
+  getTotalUnpaidRewards,
+} from '../services/unpaidRewardsService';
+
+// Update eligible wallets list every hour (not every distribution cycle)
+const ELIGIBLE_WALLETS_UPDATE_INTERVAL = 60 * 60 * 1000; // 1 hour
+let lastEligibleWalletsUpdate: number = 0;
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let isRunning = false;
@@ -24,12 +33,12 @@ async function processRewards(): Promise<void> {
   }
 
   const startTime = Date.now();
+  const now = startTime; // Alias for compatibility with existing code
   const lastRun = getLastRewardRun();
-  const now = startTime;
 
   // Check if enough time has passed since last run
-  if (lastRun !== null && (now - lastRun) < REWARD_CONFIG.MIN_REWARD_INTERVAL) {
-    const timeUntilNext = REWARD_CONFIG.MIN_REWARD_INTERVAL - (now - lastRun);
+  if (lastRun !== null && (startTime - lastRun) < REWARD_CONFIG.MIN_REWARD_INTERVAL) {
+    const timeUntilNext = REWARD_CONFIG.MIN_REWARD_INTERVAL - (startTime - lastRun);
     logger.debug('Skipping reward run - too soon since last run', {
       lastRun: new Date(lastRun).toISOString(),
       timeUntilNext: `${Math.ceil(timeUntilNext / 1000)}s`,
@@ -43,11 +52,41 @@ async function processRewards(): Promise<void> {
   });
 
   try {
+    // Update eligible wallets list periodically (not every distribution cycle)
+    const timeSinceLastUpdate = startTime - lastEligibleWalletsUpdate;
+    
+    if (timeSinceLastUpdate >= ELIGIBLE_WALLETS_UPDATE_INTERVAL || lastEligibleWalletsUpdate === 0) {
+      try {
+        logger.info('Updating eligible wallets list (periodic update)', {
+          timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000),
+        });
+        await updateEligibleWallets();
+        lastEligibleWalletsUpdate = startTime;
+        
+        const metadata = getEligibleWalletsMetadata();
+        logger.info('Eligible wallets list updated successfully', {
+          eligibleCount: metadata.count,
+          lastUpdated: metadata.lastUpdated ? new Date(metadata.lastUpdated).toISOString() : null,
+        });
+      } catch (updateError) {
+        logger.error('Failed to update eligible wallets list', {
+          error: updateError instanceof Error ? updateError.message : String(updateError),
+        });
+        // Don't throw - continue with existing eligible wallets list
+      }
+    } else {
+      logger.debug('Skipping eligible wallets update (too soon)', {
+        timeSinceLastUpdate: Math.round(timeSinceLastUpdate / 1000),
+        nextUpdateIn: Math.round((ELIGIBLE_WALLETS_UPDATE_INTERVAL - timeSinceLastUpdate) / 1000),
+      });
+    }
+
     // Process withheld tax from Token-2022 transfers
     // This: 1) Harvests NUKE taxes, 2) Swaps NUKE to SOL, 3) Distributes SOL to holders (75%) and treasury (25%)
+    let taxResult: Awaited<ReturnType<typeof TaxService.processWithheldTax>> | null = null;
     try {
       logger.info('Processing withheld tax from Token-2022 transfers');
-      const taxResult = await TaxService.processWithheldTax();
+      taxResult = await TaxService.processWithheldTax();
       if (taxResult) {
         logger.info('Tax distribution completed', {
           nukeHarvested: taxResult.totalTax.toString(),
@@ -71,15 +110,6 @@ async function processRewards(): Promise<void> {
 
     const endTime = Date.now();
     const duration = endTime - startTime;
-
-    // Get tax result for historical record (already processed above, but we need it for history)
-    let taxResult: Awaited<ReturnType<typeof TaxService.processWithheldTax>> | null = null;
-    try {
-      // Re-fetch tax result if we need it (or store it from above)
-      // For now, we'll get stats separately
-    } catch {
-      // Already logged above
-    }
 
     // Get additional statistics for historical record
     let excludedHoldersCount = 0;
@@ -119,7 +149,7 @@ async function processRewards(): Promise<void> {
       });
     }
 
-    // Get tax stats for history and logging
+    // Get tax stats for history and logging (get once, use multiple times)
     const taxStats = TaxService.getTaxStatistics();
     const lastDistribution = taxStats.lastTaxDistribution 
       ? new Date(taxStats.lastTaxDistribution).getTime()
@@ -155,6 +185,65 @@ async function processRewards(): Promise<void> {
       });
       // Don't throw - allow scheduler to continue
     }
+
+    // Get unpaid rewards statistics for summary
+    let walletsWithAccumulatedRewards = 0;
+    let totalPendingRewardsSOL = 0;
+    try {
+      walletsWithAccumulatedRewards = getAllWalletsWithAccumulatedRewards().length;
+      totalPendingRewardsSOL = getTotalUnpaidRewards();
+    } catch (error) {
+      logger.debug('Failed to get unpaid rewards statistics for summary', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Determine harvest status for summary (taxStats already retrieved above)
+    const harvestStatus = taxResult 
+      ? (taxResult.distributionResult ? 'EXECUTED' : 'HARVESTED_ONLY')
+      : (taxStats.totalNukeHarvested !== '0' ? 'SKIPPED_THRESHOLD' : 'NO_TAX');
+
+    // Determine if batch harvest was used
+    const wasBatched = taxResult?.swapSignature?.includes(',') || false;
+
+    // Create epoch summary report
+    logger.info('📊 Epoch Summary Report', {
+      epoch: new Date(startTime).toISOString(),
+      duration: `${duration}ms`,
+      startTime: new Date(startTime).toISOString(),
+      endTime: new Date(endTime).toISOString(),
+      tax: {
+        totalCollected: taxStats.totalTaxCollected,
+        harvestStatus,
+        wasBatched,
+        nukeHarvested: taxResult?.totalTax?.toString() || '0',
+        solToHolders: taxResult ? (Number(taxResult.rewardAmount) / 1e9).toFixed(6) : '0',
+        solToTreasury: taxResult ? (Number(taxResult.treasuryAmount) / 1e9).toFixed(6) : '0',
+        swapSignature: taxResult?.swapSignature || null,
+        swapSignatureCount: taxResult?.swapSignature?.split(',').length || 0,
+      },
+      payouts: {
+        sent: taxResult?.distributionResult?.distributedCount || 0,
+        skipped: taxResult?.distributionResult?.skippedCount || 0,
+        failed: taxResult?.distributionResult?.errors?.length || 0,
+        totalDistributedSOL: taxResult?.distributionResult 
+          ? (Number(taxResult.distributionResult.totalDistributed) / 1e9).toFixed(6)
+          : '0',
+      },
+      accumulatedRewards: {
+        walletsWithAccumulatedRewards,
+        totalPendingRewardsSOL: totalPendingRewardsSOL.toFixed(6),
+      },
+      holders: {
+        total: totalHoldersCount,
+        eligible: eligibleHoldersCount,
+        excluded: excludedHoldersCount,
+        blacklisted: blacklistedHoldersCount,
+      },
+      tokenPrice: {
+        usd: tokenPriceUSD.toFixed(6),
+      },
+    });
 
     logger.info('Reward distribution run completed', {
       startTime: new Date(startTime).toISOString(),

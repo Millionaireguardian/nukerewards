@@ -4,12 +4,40 @@ import { logger } from './utils/logger';
 import { loadKeypairFromEnv, loadKeypairFromEnvOptional } from './utils/loadKeypairFromEnv';
 import { PublicKey } from '@solana/web3.js';
 import { suppressSolanaRetryMessages } from './utils/rateLimitLogger';
+import { isTokenMode, isUsdMode, MIN_PAYOUT_CONFIG, TAX_THRESHOLD_CONFIG, BATCH_HARVEST_CONFIG } from './config/constants';
 
 // Load environment variables from .env file
 dotenv.config();
 
 // Suppress Solana web3.js retry messages (limit to 3)
 suppressSolanaRetryMessages();
+
+/**
+ * Log application configuration on startup
+ */
+function logStartupConfiguration(): void {
+  const mode = isTokenMode() ? 'TOKEN' : 'USD';
+  logger.info('📊 Application Configuration', {
+    mode,
+    isTokenMode: isTokenMode(),
+    isUsdMode: isUsdMode(),
+    minPayoutConfig: {
+      token: MIN_PAYOUT_CONFIG.MIN_PAYOUT_TOKEN,
+      usd: MIN_PAYOUT_CONFIG.MIN_PAYOUT_USD,
+    },
+    taxThresholdConfig: {
+      token: TAX_THRESHOLD_CONFIG.MIN_TAX_THRESHOLD_TOKEN,
+      usd: TAX_THRESHOLD_CONFIG.MIN_TAX_THRESHOLD_USD,
+    },
+    batchHarvestConfig: {
+      maxHarvestToken: BATCH_HARVEST_CONFIG.MAX_HARVEST_TOKEN,
+      maxHarvestUsd: BATCH_HARVEST_CONFIG.MAX_HARVEST_USD,
+      batchCount: BATCH_HARVEST_CONFIG.BATCH_COUNT,
+      batchDelayTokenMode: BATCH_HARVEST_CONFIG.BATCH_DELAY_TOKEN_MODE,
+      batchDelayUsdMode: BATCH_HARVEST_CONFIG.BATCH_DELAY_USD_MODE,
+    },
+  });
+}
 
 /**
  * Validate and load all required wallets on startup
@@ -96,6 +124,9 @@ function validateWallets(): void {
  */
 async function main(): Promise<void> {
   try {
+    // Log configuration on startup
+    logStartupConfiguration();
+
     // Validate wallets before starting server
     validateWallets();
 
